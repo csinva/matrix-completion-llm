@@ -5,6 +5,7 @@ repo_dir = dirname(dirname(os.path.abspath(__file__)))
 
 # Showcasing different ways to sweep over arguments
 # Can pass any empty dict for any of these to avoid sweeping
+# python experiments/01_train_and_test.py --use_cache 0
 
 # List of values to sweep over (sweeps over all combinations of these)
 params_shared_dict = {

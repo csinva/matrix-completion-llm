@@ -14,7 +14,7 @@ def get_datasets_as_matrices(dataset_names: List[str]):
     for dataset_name in dataset_names:
         # load tabular data
         X_train, X_test, y_train, y_test, feature_names = imodels.get_clean_dataset(
-            'compas_two_year_clean', data_source='imodels', test_size=0.33)
+            dataset_name, data_source='imodels', test_size=0.33)
         mat_train = np.concatenate([X_train, y_train.reshape(-1, 1)], axis=1)
         mat_test = np.concatenate([X_test, y_test.reshape(-1, 1)], axis=1)
         mats_train.append(mat_train)
