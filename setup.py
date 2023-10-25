@@ -9,19 +9,18 @@ with open(path.join(path_to_repo, 'readme.md'), encoding='utf-8') as f:
 required_pypi = [
     'numpy',
     'scikit-learn',
-    'joblib', # for saving/loading
+    'joblib',  # for saving/loading
     'pandas',
     'tqdm',
-    'dict_hash', # required for caching
-    'imodelsx', # utilities for working with NLP
-    
-    'datasets', # optional, required for getting NLP datasets
-    'imodels', # optional, required for getting tabular datasets / interpretable modeling
-    'pytest', # optional, required for running tests
+    'dict_hash',  # required for caching
+    'imodelsx',  # utilities for working with NLP
+    'imodels',  # optional, required for getting tabular datasets / interpretable modeling
+    'pytest',  # optional, required for running tests
+    'torch',
 ]
 
 setuptools.setup(
-    name="project_name",
+    name="mcllm",
     version="0.01",
     author="Microsoft Research",
     author_email="",

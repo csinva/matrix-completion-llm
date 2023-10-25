@@ -1,3 +1,6 @@
+import torch
+import mcllm.data
+import mcllm.model.model
 import argparse
 from copy import deepcopy
 import logging
@@ -9,42 +12,12 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 import joblib
 import imodels
-import inspect
 import os.path
 import imodelsx.cache_save_utils
 
 path_to_repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-import project_name.model
-import project_name.data
 
 
-def fit_model(model, X_train, y_train, feature_names, r):
-    # fit the model
-    fit_parameters = inspect.signature(model.fit).parameters.keys()
-    if "feature_names" in fit_parameters and feature_names is not None:
-        model.fit(X_train, y_train, feature_names=feature_names)
-    else:
-        model.fit(X_train, y_train)
-
-    return r, model
-
-
-def evaluate_model(model, X_train, X_cv, X_test, y_train, y_cv, y_test, r):
-    """Evaluate model performance on each split"""
-    metrics = {
-        "accuracy": accuracy_score,
-    }
-    for split_name, (X_, y_) in zip(
-        ["train", "cv", "test"], [(X_train, y_train), (X_cv, y_cv), (X_test, y_test)]
-    ):
-        y_pred_ = model.predict(X_)
-        for metric_name, metric_fn in metrics.items():
-            r[f"{metric_name}_{split_name}"] = metric_fn(y_, y_pred_)
-
-    return r
-
-
-# initialize args
 def add_main_args(parser):
     """Caching uses the non-default values from argparse to name the saving directory.
     Changing the default arg an argument will break cache compatibility with previous runs.
@@ -71,14 +44,10 @@ def add_main_args(parser):
     parser.add_argument(
         "--model_name",
         type=str,
-        choices=["decision_tree", "ridge"],
-        default="decision_tree",
+        choices=["mean_imputation", "median_imputation"],
+        default="mean_imputation",
         help="name of model",
     )
-    parser.add_argument(
-        "--alpha", type=float, default=1, help="regularization strength"
-    )
-    parser.add_argument("--max_depth", type=int, default=2, help="max depth of tree")
     return parser
 
 
@@ -98,7 +67,8 @@ if __name__ == "__main__":
     # get args
     parser = argparse.ArgumentParser()
     parser_without_computational_args = add_main_args(parser)
-    parser = add_computational_args(deepcopy(parser_without_computational_args))
+    parser = add_computational_args(
+        deepcopy(parser_without_computational_args))
     args = parser.parse_args()
 
     # set up logging
@@ -120,30 +90,18 @@ if __name__ == "__main__":
     # set seed
     np.random.seed(args.seed)
     random.seed(args.seed)
-    # torch.manual_seed(args.seed)
-
-    # load text data
-    dset, dataset_key_text = project_name.data.load_huggingface_dataset(
-        dataset_name=args.dataset_name, subsample_frac=args.subsample_frac
-    )
-    (
-        X_train,
-        X_test,
-        y_train,
-        y_test,
-        feature_names,
-    ) = project_name.data.convert_text_data_to_counts_array(dset, dataset_key_text)
+    torch.manual_seed(args.seed)
 
     # load tabular data
-    # https://csinva.io/imodels/util/data_util.html#imodels.util.data_util.get_clean_dataset
-    # X_train, X_test, y_train, y_test, feature_names = imodels.get_clean_dataset('compas_two_year_clean', data_source='imodels', test_size=0.33)
+    X_train, X_test, y_train, y_test, feature_names = imodels.get_clean_dataset(
+        'compas_two_year_clean', data_source='imodels', test_size=0.33)
 
     X_train, X_cv, y_train, y_cv = train_test_split(
         X_train, y_train, test_size=0.33, random_state=args.seed
     )
 
     # load model
-    model = project_name.model.get_model(args)
+    mc_model = mcllm.model.model.get_matrix_completion_model(args)
 
     # set up saving dictionary + save params file
     r = defaultdict(list)
@@ -154,14 +112,17 @@ if __name__ == "__main__":
     )
 
     # fit
-    r, model = fit_model(model, X_train, y_train, feature_names, r)
+    if hasattr(mc_model, "fit"):
+        mc_model.fit(X_train, y_train)
 
     # evaluate
-    r = evaluate_model(model, X_train, X_cv, X_test, y_train, y_cv, y_test, r)
+    X_imputed = mc_model.impute(X_test)
+    err = np.linalg.norm(X_imputed - X_test)
+    print('err', err)
 
     # save results
     joblib.dump(
         r, join(save_dir_unique, "results.pkl")
     )  # caching requires that this is called results.pkl
-    joblib.dump(model, join(save_dir_unique, "model.pkl"))
+    joblib.dump(mc_model, join(save_dir_unique, "model.pkl"))
     logging.info("Succesfully completed :)\n\n")
