@@ -25,19 +25,28 @@ def add_main_args(parser):
 
     # dataset args
     parser.add_argument(
-        "--dataset_name", type=str, default="rotten_tomatoes", help="name of dataset"
+        "--dataset_names_train", type=str, default=["breast_cancer"], help="names of training datasets"
+    )
+    parser.add_argument(
+        "--dataset_names_test", type=str, default=["breast_cancer", "compas_two_year_clean"], help="names of test datasets"
     )
     parser.add_argument(
         "--subsample_frac", type=float, default=1, help="fraction of samples to use"
     )
 
-    # training misc args
+    # evaluating misc args
     parser.add_argument("--seed", type=int, default=1, help="random seed")
     parser.add_argument(
         "--save_dir",
         type=str,
         default=join(path_to_repo, "results"),
         help="directory for saving",
+    )
+    parser.add_argument(
+        "--frac_nans",
+        type=float,
+        default=0.1,
+        help="fraction of values to set to nan",
     )
 
     # model args
@@ -92,14 +101,6 @@ if __name__ == "__main__":
     random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    # load tabular data
-    X_train, X_test, y_train, y_test, feature_names = imodels.get_clean_dataset(
-        'compas_two_year_clean', data_source='imodels', test_size=0.33)
-
-    X_train, X_cv, y_train, y_cv = train_test_split(
-        X_train, y_train, test_size=0.33, random_state=args.seed
-    )
-
     # load model
     mc_model = mcllm.model.model.get_matrix_completion_model(args)
 
@@ -113,12 +114,29 @@ if __name__ == "__main__":
 
     # fit
     if hasattr(mc_model, "fit"):
-        mc_model.fit(X_train, y_train)
+        mats_train, mats_test = mcllm.data.get_datasets_as_matrices(
+            args.dataset_names_train)
+        mc_model.fit(mats_train, mats_test)
 
-    # evaluate
-    X_imputed = mc_model.impute(X_test)
-    err = np.linalg.norm(X_imputed - X_test)
-    print('err', err)
+    # test
+    mats_train, mats_test = mcllm.data.get_datasets_as_matrices(
+        args.dataset_names_test)
+    errors = []
+    for i in range(len(mats_test)):
+        mat_test = mats_test[i]
+        mat_test_nans = deepcopy(mat_test)
+        idxs_nan = np.random.choice(
+            np.arange(mat_test.size), size=int(args.frac_nans * mat_test.size), replace=False
+        )
+        mat_test_nans.ravel()[idxs_nan] = np.nan
+        mat_imputed = mc_model.impute(mat_test_nans)
+        mean_abs_err_normalized = np.mean(np.abs(mat_imputed.ravel()[idxs_nan] -
+                                                 mat_test.ravel()[idxs_nan])) / np.mean(mat_test.ravel()[idxs_nan])
+        errors.append(mean_abs_err_normalized)
+    r['mean_abs_err_normalized_list'] = mean_abs_err_normalized
+    r['avg_mean_abs_err_normalized_list'] = np.mean(mean_abs_err_normalized)
+    logging.info(
+        f'mean_abs_err_normalized {np.mean(mean_abs_err_normalized):0.4f}')
 
     # save results
     joblib.dump(
