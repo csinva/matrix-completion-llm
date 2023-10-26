@@ -7,11 +7,10 @@ import torch.nn.functional as F
 
 
 class BertEmbeddings(torch.nn.Module):
-    def __init__(self, vocab_size, n_embed=3, max_seq_len=16):
+    def __init__(self, n_embed=3, max_seq_len=16):
         super().__init__()
         self.max_seq_len = max_seq_len
-
-        self.word_embeddings = torch.nn.Embedding(vocab_size, n_embed)
+        self.word_embeddings = torch.nn.Linear(1, n_embed)
         self.pos_embeddings = torch.nn.Embedding(max_seq_len, n_embed)
 
         self.layer_norm = torch.nn.LayerNorm(
@@ -19,10 +18,15 @@ class BertEmbeddings(torch.nn.Module):
         self.dropout = torch.nn.Dropout(p=0.1, inplace=False)
 
     def forward(self, x):
+        # x is (batch_size, seq_len)
+        # seq_len is the flattened matrix
         position_ids = torch.arange(
             self.max_seq_len, dtype=torch.long, device=x.device)
 
-        words_embeddings = self.word_embeddings(x)
+        # words_embeddings are (batch_size, seq_len, n_embed)
+        words_embeddings = self.word_embeddings(x.unsqueeze(-1))
+
+        # position_embeddings are (batch_size, n_embed)
         position_embeddings = self.pos_embeddings(position_ids)
 
         embeddings = words_embeddings + position_embeddings
@@ -164,12 +168,10 @@ class NanoBERT(torch.nn.Module):
     This implementation does not cover the Seq2Seq problem, but can be easily extended to that.
     """
 
-    def __init__(self, vocab_size, n_layers=2, n_heads=1, dropout=0.1, n_embed=3, max_seq_len=16):
+    def __init__(self, n_layers=2, n_heads=1, dropout=0.1, n_embed=3, max_seq_len=16):
         """
         Params
         ------
-        vocab_size: int
-            size of the vocabulary that tokenizer is using
         n_layers: int
             number of BERT layer in the model (default=2)
         n_heads: int    
@@ -183,13 +185,16 @@ class NanoBERT(torch.nn.Module):
         """
         super().__init__()
 
-        self.embedding = BertEmbeddings(vocab_size, n_embed, max_seq_len)
+        self.embedding = BertEmbeddings(n_embed, max_seq_len)
 
         self.encoder = BertEncoder(n_layers, n_heads, dropout, n_embed)
 
         self.predictor = torch.nn.Linear(in_features=n_embed, out_features=1)
 
     def forward(self, x):
+        # x is (batch_size, seq_len)
+        # seq_len is the flattened matrix
+
         # attention masking for padded token
         # (batch_size, seq_len, seq_len)
         mask = (x > 0).unsqueeze(1).repeat(1, x.size(1), 1)
