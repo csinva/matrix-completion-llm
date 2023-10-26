@@ -59,73 +59,18 @@ class TabEmbeddings(torch.nn.Module):
         return embeddings
 
 
-class TabAttentionHead(torch.nn.Module):
-    """
-    A single attention head in MultiHeaded Self Attention layer.
-    The idea is identical to the original paper ("Attention is all you need"),
-    however instead of implementing multiple heads to be evaluated in parallel we matrix multiplication,
-    separated in a distinct class for easier and clearer interpretability
-    """
-
-    def __init__(self, head_size, dropout=0.1, n_embed=3):
-        super().__init__()
-
-        self.query = torch.nn.Linear(
-            in_features=n_embed, out_features=head_size)
-        self.key = torch.nn.Linear(in_features=n_embed, out_features=head_size)
-        self.values = torch.nn.Linear(
-            in_features=n_embed, out_features=head_size)
-
-        self.dropout = torch.nn.Dropout(dropout)
-
-    def forward(self, x, att_mask):
-        # B, Seq_len, N_embed
-        B, seq_len, n_embed = x.shape
-
-        q = self.query(x)
-        k = self.key(x)
-        v = self.values(x)
-
-        weights = (q @ k.transpose(-2, -1)) / \
-            math.sqrt(n_embed)  # (B, Seq_len, Seq_len)
-        # mask out not attended tokens
-        weights = weights.masked_fill(att_mask == 0, -1e9)
-
-        scores = F.softmax(weights, dim=-1)
-        scores = self.dropout(scores)
-
-        context = scores @ v
-
-        return context
-
-
 class TabSelfAttention(torch.nn.Module):
-    """
-    MultiHeaded Self-Attention mechanism as described in "Attention is all you need"
-    """
-
     def __init__(self, n_heads=1, dropout=0.1, n_embed=3):
         super().__init__()
-
-        head_size = n_embed // n_heads
-
-        n_heads = n_heads
-
-        self.heads = torch.nn.ModuleList(
-            [TabAttentionHead(head_size, dropout, n_embed) for _ in range(n_heads)])
-
-        # project from multiple heads to the single space
-        self.proj = torch.nn.Linear(head_size * n_heads, n_embed)
-
+        self.mha = torch.nn.MultiheadAttention(
+            embed_dim=n_embed, num_heads=n_heads, dropout=dropout, batch_first=True)
+        self.proj = torch.nn.Linear(n_embed, n_embed)
         self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x, att_mask):
-        context = torch.cat([head(x, att_mask) for head in self.heads], dim=-1)
-
+        context, _ = self.mha(x, x, x)  # , key_padding_mask=att_mask)
         proj = self.proj(context)
-
         out = self.dropout(proj)
-
         return out
 
 
@@ -142,7 +87,6 @@ class FeedForward(torch.nn.Module):
 
     def forward(self, x):
         out = self.ffwd(x)
-
         return out
 
 
@@ -169,26 +113,12 @@ class TabLayer(torch.nn.Module):
         return out
 
 
-class TabEncoder(torch.nn.Module):
-    def __init__(self, n_layers=2, n_heads=1, dropout=0.1, n_embed=3):
-        super().__init__()
-
-        self.layers = torch.nn.ModuleList(
-            [TabLayer(n_heads, dropout, n_embed) for _ in range(n_layers)])
-
-    def forward(self, x, att_mask):
-        for layer in self.layers:
-            x = layer(x, att_mask)
-
-        return x
-
-
 class TabLLM(torch.nn.Module):
     """
     BERT-style encoder
     """
 
-    def __init__(self, n_layers=2, n_heads=1, dropout=0.1, n_embed=3):
+    def __init__(self, n_layers=2, n_heads=3, dropout=0.1, n_embed=10):
         """
         Params
         ------
@@ -205,7 +135,8 @@ class TabLLM(torch.nn.Module):
 
         self.embedding = TabEmbeddings(n_embed)
 
-        self.encoder = TabEncoder(n_layers, n_heads, dropout, n_embed)
+        self.tab_layers = torch.nn.ModuleList(
+            [TabLayer(n_heads, dropout, n_embed) for _ in range(n_layers)])
 
         self.predictor = torch.nn.Linear(in_features=n_embed, out_features=1)
 
@@ -229,14 +160,13 @@ class TabLLM(torch.nn.Module):
             number of columns in the input matrix
         '''
 
-        # attention masking for padded token
-        # (batch_size, seq_len, seq_len)
-        att_mask = (x > 0).unsqueeze(1).repeat(1, x.size(1), 1)
-
         # embeddings become (batch_size, seq_len, n_embed)
-        embeddings = self.embedding(x, nan_mask, n_rows, n_columns)
+        x = self.embedding(x, nan_mask, n_rows, n_columns)
 
-        encoded = self.encoder(embeddings, att_mask)
+        # apply each encoding layer
+        for layer in self.tab_layers:
+            x = layer(x, att_mask)
 
-        predictions = self.predictor(encoded).squeeze(-1)
+        # project embedding size to scalar matrix
+        predictions = self.predictor(x).squeeze(-1)
         return predictions

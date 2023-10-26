@@ -7,29 +7,38 @@ import torch
 class LowRankDataset(data.Dataset):
     '''
     Dataset that returns low-rank matrices
+
+    Params
+    ------
+    static: bool
+        Decides whether the same matrix should be returned at the same index every time
     '''
 
-    def __init__(self, m, n, rank, frac_nan_mask, length=100, seed=13):
+    def __init__(self, m, n, rank, frac_nan_mask, length=100, seed=13, randomize=False):
         self.m = m
         self.n = n
         self.rank = rank
         self.frac_nan_mask = frac_nan_mask
         self.seed = seed
         self.length = length
-        self.rng = np.random.default_rng(self.seed)
+        self.randomize = randomize
 
     def __len__(self):
         return self.length
 
-    def create_low_rank_matrix(self, m, n, rank, seed=13):
+    def create_low_rank_matrix(self, m, n, rank, seed=13, idx=None):
         rng = self.rng
-        # rng = np.random.default_rng(seed)
-        A = rng.normal(size=(m, rank)) @ rng.normal(size=(rank, n))
+        # A = rng.normal(size=(m, rank)) @ rng.normal(size=(rank, n))
+        A = rng.uniform(size=(m, rank)) @ rng.uniform(size=(rank, n))
         return A
 
     def __getitem__(self, idx):
+        if self.randomize:
+            self.rng = np.random.default_rng(seed=None)
+        else:
+            self.rng = np.random.default_rng(self.seed + idx)
         x = self.create_low_rank_matrix(
-            self.m, self.n, self.rank, seed=self.seed)
+            self.m, self.n, self.rank)
         x = (x - x.mean(axis=1).reshape(-1, 1)) / x.std(axis=1).reshape(-1, 1)
         x = x.flatten()
 

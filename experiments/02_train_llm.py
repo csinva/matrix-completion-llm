@@ -18,7 +18,7 @@ import torch.nn.functional as F
 import os.path
 import imodelsx.cache_save_utils
 import torch.utils.data as data
-
+# python experiments/02_train_llm.py --use_data_parallel 0 --rank 1 --n_matrices=1024
 path_to_repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -26,27 +26,36 @@ def add_main_args(parser):
     """Caching uses the non-default values from argparse to name the saving directory.
     Changing the default arg an argument will break cache compatibility with previous runs.
     """
-    parser.add_argument('--device', default='cuda',
-                        type=str, help='Device to use')
-    parser.add_argument('--num_epochs', default=100,
-                        type=int, help='Number of epochs')
-    parser.add_argument('--lr', default=1e-3, type=float, help='Learning rate')
-    parser.add_argument('--batch_size', default=2048,
-                        type=int, help='Batch size')
-    parser.add_argument('--n_embed', default=10,
-                        type=int, help='Embedding size')
-    parser.add_argument('--dropout', default=0,
-                        type=float, help='Dropout rate')
-    parser.add_argument('--n_rows', default=50,
+
+    # data args
+    parser.add_argument('--n_rows', default=8,
                         type=int, help='Number of rows')
-    parser.add_argument('--n_columns', default=20,
+    parser.add_argument('--n_columns', default=6,
                         type=int, help='Number of columns')
-    parser.add_argument('--rank', default=5, type=int, help='Rank')
-    parser.add_argument('--frac_nan_mask', default=0.1,
+    parser.add_argument('--rank', default=1, type=int, help='Rank')
+    parser.add_argument('--n_matrices_test', default=32768,
+                        type=int, help='Number of matrices to put before printing (each matrix is newly generated)')
+
+    # training args
+    parser.add_argument('--frac_nan_mask', default=0.05,
                         type=float, help='Fraction of NaN mask')
     parser.add_argument('--seed', default=13, type=int, help='Seed')
-    parser.add_argument('--n_matrices', default=32768,
-                        type=int, help='Number of matrices')
+    parser.add_argument('--num_epochs', default=10000,
+                        type=int, help='Number of epochs')
+    parser.add_argument('--lr', default=1e-3, type=float, help='Learning rate')
+    parser.add_argument('--batch_size', default=1024,
+                        type=int, help='Batch size')
+
+    # model args
+    parser.add_argument('--n_layers', default=3,
+                        type=int, help='Number of layers')
+    parser.add_argument('--n_heads', default=3,
+                        type=int, help='Number of heads')
+    parser.add_argument('--dropout', default=0,
+                        type=float, help='Dropout rate')
+    parser.add_argument('--n_embed', default=12,
+                        type=int, help='Embedding size')
+
     parser.add_argument(
         "--save_dir",
         type=str,
@@ -61,17 +70,19 @@ def add_computational_args(parser):
     parser.add_argument(
         "--use_cache",
         type=int,
-        default=1,
+        default=0,
         choices=[0, 1],
         help="whether to check for cache",
     )
     parser.add_argument(
         '--use_data_parallel',
         type=int,
-        default=1,
+        default=0,
         choices=[0, 1],
         help='whether to use data parallel',
     )
+    parser.add_argument('--device', default='cuda',
+                        type=str, help='Device to use')
     return parser
 
 
@@ -104,27 +115,33 @@ if __name__ == "__main__":
     random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    llm = TabLLM(
-        n_embed=args.n_embed, n_layers=3, n_heads=3, dropout=args.dropout).to(args.device)
-
+    # get data
+    logging.info('generating data...')
     dataset = LowRankDataset(args.n_rows, args.n_columns, args.rank, args.frac_nan_mask,
-                             seed=args.seed, length=args.n_matrices)
+                             seed=args.seed, length=args.batch_size * 16, randomize=True)
+    dataset_test = LowRankDataset(args.n_rows, args.n_columns, args.rank, args.frac_nan_mask,
+                                  seed=args.seed + 1, length=args.n_matrices_test, randomize=False)
 
-    llm = llm.to(args.device)
+    logging.info('loading model.....')
+    llm = TabLLM(
+        n_embed=args.n_embed, n_layers=args.n_layers, n_heads=args.n_heads, dropout=args.dropout).to(args.device)
+
     if args.use_data_parallel:
         llm = torch.nn.DataParallel(llm, device_ids=[0, 1, 2, 3])
     optimizer = torch.optim.Adam(llm.parameters(), lr=args.lr)
     dataloader = data.DataLoader(
         dataset, batch_size=args.batch_size, shuffle=True)
+    dataloader_test = data.DataLoader(
+        dataset_test, batch_size=args.batch_size * 2, shuffle=False)
 
     train_losses = []
+    test_losses = []
+    logging.info('starting training...')
     for i in range(args.num_epochs):
-        train_loss = 0.0
-        train_preds = []
-        train_labels = []
 
+        # train and compute train loss
         llm.train()
-
+        train_loss = 0.0
         for batch_num, (x_nan_t, x_clean_t, nan_mask_t) in enumerate(dataloader):
             x_nan_t = x_nan_t.to(args.device)
             x_clean_t = x_clean_t.to(args.device)
@@ -134,16 +151,44 @@ if __name__ == "__main__":
             pred = llm(x_nan_t, nan_mask_t, att_mask_t,
                        n_rows=args.n_rows, n_columns=args.n_columns)
             nan_loss = F.mse_loss(
-                x_clean_t[nan_mask_t.bool()], pred[nan_mask_t.bool()])
+                x_clean_t[nan_mask_t.bool()], pred[nan_mask_t.bool()], reduction='mean')
 
             optimizer.zero_grad()
             nan_loss.backward()
             optimizer.step()
 
-            train_loss += nan_loss.item() / nan_mask_t.sum().item()
-            train_losses.append(train_loss)
+            train_loss += nan_loss.item() / nan_mask_t.sum().item() / \
+                torch.abs(x_clean_t[nan_mask_t.bool()]).mean()
 
-        print(f'{i} -- Train loss {train_loss:0.6f}')
+        # print(f'{i} -- Train loss {train_loss}')
+        train_losses.append(train_loss)
+
+        # compute test loss
+        llm.eval()
+        test_loss = 0.0
+        n_masked = 0
+        for batch_num, (x_nan_t, x_clean_t, nan_mask_t) in enumerate(dataloader_test):
+            x_nan_t = x_nan_t.to(args.device)
+            x_clean_t = x_clean_t.to(args.device)
+            nan_mask_t = nan_mask_t.to(args.device)
+            att_mask_t = torch.ones_like(x_nan_t).to(args.device)
+            # print('nan', nan_mask_t.shape, x_clean_t[nan_mask_t.bool()].shape)
+
+            pred = llm(x_nan_t, nan_mask_t, att_mask_t,
+                       n_rows=args.n_rows, n_columns=args.n_columns)
+            # compute mean absolute fraction err
+            test_loss += (
+                torch.abs(x_clean_t[nan_mask_t.bool()] -
+                          pred[nan_mask_t.bool()])
+            ).sum().item()  #
+            n_masked += nan_mask_t.sum().item()
+
+        test_loss /= n_masked
+        if i == 0:
+            print('Baseline loss', torch.abs(
+                x_clean_t[nan_mask_t.bool()]).mean().item())
+        print(f'{i} -- Test loss {test_loss}')
+        test_losses.append(test_loss)
 
     # set up saving dictionary + save params file
     r = defaultdict(list)
@@ -152,6 +197,7 @@ if __name__ == "__main__":
     r['train_losses'] = train_losses
 
     # save results
+    os.makedirs(save_dir_unique, exist_ok=True)
     joblib.dump(
         r, join(save_dir_unique, "results.pkl")
     )  # caching requires that this is called results.pkl
