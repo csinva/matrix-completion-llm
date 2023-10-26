@@ -236,5 +236,5 @@ class TabLLM(torch.nn.Module):
             x = layer(x, att_mask)
 
         # project embedding size to scalar matrix
-        predictions = self.unembedding(x).squeeze(-1)
-        return predictions
+        mat = self.unembedding(x).squeeze(-1)
+        return mat

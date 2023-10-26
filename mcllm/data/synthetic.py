@@ -14,14 +14,16 @@ class LowRankDataset(data.Dataset):
         Decides whether the same matrix should be returned at the same index every time
     '''
 
-    def __init__(self,
-                 m_list: List[int],
-                 n_list: List[int],
-                 rank_list: List[int],
-                 frac_nan_mask_list: List[float],
-                 use_rowcol_attn: bool = False,
-                 length=100, seed=13, randomize=False
-                 ):
+    def __init__(
+        self,
+        m_list: List[int],
+        n_list: List[int],
+        rank_list: List[int],
+        frac_nan_mask_list: List[float],
+        use_rowcol_attn: bool = False,
+        length=100, seed=13, randomize=False,
+        n_registers=1,
+    ):
         self.m_list = m_list
         self.n_list = n_list
         self.m_max = max(m_list)
@@ -32,6 +34,7 @@ class LowRankDataset(data.Dataset):
         self.length = length
         self.randomize = randomize
         self.use_rowcol_attn = use_rowcol_attn
+        self.n_registers = n_registers
 
     def __len__(self):
         return self.length
@@ -44,20 +47,37 @@ class LowRankDataset(data.Dataset):
 
     def _create_attn_mask(self, m, n):
         '''Create attention mask of size (seq_len, seq_len)
+        Note: registers are stored at the right / bottom of the sequence
+            Each row/col can attend to its own registers, and registers can attend to each other
+            in addition to their own row/col
         '''
-        seq_len = self.n_max * self.m_max
+        seq_len = (self.m_max + self.n_registers) * \
+            (self.n_max + self.n_registers)
+        m_max_with_reg = self.m_max + self.n_registers
         if self.use_rowcol_attn:
             att_mask_kernel = np.zeros((seq_len, seq_len))
             for i in range(seq_len):
-                r_idx_row = i // self.m_max
-                c_idx_row = i % self.m_max
+                r_idx_row = i // m_max_with_reg
+                c_idx_row = i % m_max_with_reg
                 for j in range(seq_len):
-                    r_idx_col = j // self.m_max
-                    c_idx_col = j % self.m_max
+                    r_idx_col = j // m_max_with_reg
+                    c_idx_col = j % m_max_with_reg
+
+                    # everything attends to points in the same row/col
                     if r_idx_row == r_idx_col or c_idx_row == c_idx_col:
                         att_mask_kernel[i, j] = 1
+
+                    # registers attend to each other
+                    if r_idx_row >= self.n_max or r_idx_col >= self.n_max:
+                        # print(i, j)
+                        att_mask_kernel[i, j] = 1
+
+            # print(att_mask_kernel)
+            # print(att_mask_kernel[0])
+            # exit(0)
+
         else:
-            # attention mask for full attention
+            # attention mask for full attention (ignore registers for now)
             att_mask = np.zeros((self.m_max, self.n_max))
             att_mask[:m, :n] = 1
             att_mask = att_mask.flatten()
@@ -73,8 +93,6 @@ class LowRankDataset(data.Dataset):
         else:
             self.rng = np.random.default_rng(self.seed + idx)
 
-        x_full = np.zeros((self.m_max, self.n_max))
-
         # sample matrix params
         m = self.rng.choice(self.m_list)
         n = self.rng.choice(self.n_list)
@@ -85,20 +103,23 @@ class LowRankDataset(data.Dataset):
         # create matrix
         x = self.create_low_rank_matrix(m, n, rank)
         x = (x - x.mean(axis=1).reshape(-1, 1)) / x.std(axis=1).reshape(-1, 1)
+
+        # put matrix into full matrix
+        x_full = np.zeros((self.m_max + self.n_registers,
+                          self.n_max + self.n_registers))
         x_full[:m, :n] = x
+        att_mask_t = self._create_attn_mask(m, n)
 
         # nan mask - randomly mask some frac
         # only mask values in first m rows and first n cols
-        nan_mask_mini = self.rng.binomial(1, frac_nan_mask, size=(m, n))
         nan_mask = np.zeros_like(x_full)
-        nan_mask[:m, :n] = nan_mask_mini
+        nan_mask[:m, :n] = self.rng.binomial(1, frac_nan_mask, size=(m, n))
         nan_mask_t = torch.Tensor(nan_mask).flatten()
 
         x_full = x_full.flatten()
         x_clean_t = torch.Tensor(x_full)
         x_nan_t = x_clean_t.clone()
         x_nan_t[nan_mask_t.bool()] = 0
-        att_mask_t = self._create_attn_mask(m, n)
 
         return x_nan_t, x_clean_t, nan_mask_t, att_mask_t
 

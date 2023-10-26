@@ -60,6 +60,9 @@ def add_main_args(parser):
                         type=int, help='Number of heads')
     parser.add_argument('--n_embed', default=12,  # 96
                         type=int, help='Embedding size')
+    parser.add_argument('--n_registers', default=1,
+                        type=int, help='Number of registers (adds an extra row and column)')
+
     parser.add_argument('--dropout', default=0,
                         type=float, help='Dropout rate')
     parser.add_argument('--use_rowcol_attn', default=1, type=int, choices=[0, 1],
@@ -126,14 +129,18 @@ if __name__ == "__main__":
 
     # get data
     logging.info('generating data...')
+    kwargs = {
+        'm_list': args.n_rows_list,
+        'n_list': args.n_columns_list,
+        'rank_list': args.rank_list,
+        'frac_nan_mask_list': args.frac_nan_mask,
+        'use_rowcol_attn': args.use_rowcol_attn,
+        'n_registers': args.n_registers,
+    }
     dataset = LowRankDataset(
-        args.n_rows_list, args.n_columns_list, args.rank_list, args.frac_nan_mask,
-        use_rowcol_attn=args.use_rowcol_attn,
-        seed=args.seed, length=args.batch_size * 16, randomize=True)
+        seed=args.seed, length=args.batch_size * 16, randomize=True, **kwargs)
     dataset_test = LowRankDataset(
-        args.n_rows_list, args.n_columns_list, args.rank_list, args.frac_nan_mask,
-        use_rowcol_attn=args.use_rowcol_attn,
-        seed=args.seed + 1, length=args.n_matrices_test, randomize=False)
+        seed=args.seed + 1, length=args.n_matrices_test, randomize=False, **kwargs)
     dataloader = data.DataLoader(
         dataset, batch_size=args.batch_size, shuffle=True)
     dataloader_test = data.DataLoader(
