@@ -4,7 +4,6 @@ import numpy as np
 import torch
 
 
-# write a pytorch
 class LowRankDataset(data.Dataset):
     '''
     Dataset that returns low-rank matrices
@@ -43,6 +42,31 @@ class LowRankDataset(data.Dataset):
         A = rng.uniform(size=(m, rank)) @ rng.uniform(size=(rank, n))
         return A
 
+    def _create_attn_mask(self, m, n):
+        '''Create attention mask of size (seq_len, seq_len)
+        '''
+        seq_len = self.n_max * self.m_max
+        if self.use_rowcol_attn:
+            att_mask_kernel = np.zeros((seq_len, seq_len))
+            for i in range(seq_len):
+                r_idx_row = i // self.m_max
+                c_idx_row = i % self.m_max
+                for j in range(seq_len):
+                    r_idx_col = j // self.m_max
+                    c_idx_col = j % self.m_max
+                    if r_idx_row == r_idx_col or c_idx_row == c_idx_col:
+                        att_mask_kernel[i, j] = 1
+        else:
+            # attention mask for full attention
+            att_mask = np.zeros((self.m_max, self.n_max))
+            att_mask[:m, :n] = 1
+            att_mask = att_mask.flatten()
+            # pytorch mha implementation only uses att_mask (size is just seq_len)
+            att_mask_kernel = np.ones((seq_len, seq_len))
+            att_mask_kernel[~att_mask.astype(bool)] = 0
+            att_mask_kernel[:, ~att_mask.astype(bool)] = 0
+        return torch.Tensor(att_mask_kernel)
+
     def __getitem__(self, idx):
         if self.randomize:
             self.rng = np.random.default_rng(seed=None)
@@ -63,27 +87,6 @@ class LowRankDataset(data.Dataset):
         x = (x - x.mean(axis=1).reshape(-1, 1)) / x.std(axis=1).reshape(-1, 1)
         x_full[:m, :n] = x
 
-        seq_len = self.n_max * self.m_max
-        if self.use_rowcol_attn:
-            att_mask_kernel = np.zeros((seq_len, seq_len))
-            for i in range(seq_len):
-                r_idx_row = i // self.m_max
-                c_idx_row = i % self.m_max
-                for j in range(seq_len):
-                    r_idx_col = j // self.m_max
-                    c_idx_col = j % self.m_max
-                    if r_idx_row == r_idx_col or c_idx_row == c_idx_col:
-                        att_mask_kernel[i, j] = 1
-        else:
-            # attention mask for full attention (seq_len, seq_len)
-            att_mask = np.zeros((self.m_max, self.n_max))
-            att_mask[:m, :n] = 1
-            att_mask = att_mask.flatten()
-            # pytorch mha implementation only uses att_mask (just seq_len)
-            att_mask_kernel = np.ones((seq_len, seq_len))
-            att_mask_kernel[~att_mask.astype(bool)] = 0
-            att_mask_kernel[:, ~att_mask.astype(bool)] = 0
-
         # nan mask - randomly mask some frac
         # only mask values in first m rows and first n cols
         nan_mask_mini = self.rng.binomial(1, frac_nan_mask, size=(m, n))
@@ -95,7 +98,7 @@ class LowRankDataset(data.Dataset):
         x_clean_t = torch.Tensor(x_full)
         x_nan_t = x_clean_t.clone()
         x_nan_t[nan_mask_t.bool()] = 0
-        att_mask_t = torch.Tensor(att_mask_kernel)
+        att_mask_t = self._create_attn_mask(m, n)
 
         return x_nan_t, x_clean_t, nan_mask_t, att_mask_t
 
