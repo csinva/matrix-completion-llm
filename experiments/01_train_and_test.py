@@ -1,5 +1,5 @@
 import torch
-import mcllm.data
+import mcllm.data.imodels
 import mcllm.model.model
 import argparse
 from copy import deepcopy
@@ -114,12 +114,12 @@ if __name__ == "__main__":
 
     # fit
     if hasattr(mc_model, "fit"):
-        mats_train, mats_test = mcllm.data.get_datasets_as_matrices(
+        mats_train, mats_test = mcllm.data.imodels.get_datasets_as_matrices(
             args.dataset_names_train)
         mc_model.fit(mats_train, mats_test)
 
     # test
-    mats_train, mats_test = mcllm.data.get_datasets_as_matrices(
+    mats_train, mats_test = mcllm.data.imodels.get_datasets_as_matrices(
         args.dataset_names_test)
     errors = []
     for i in range(len(mats_test)):

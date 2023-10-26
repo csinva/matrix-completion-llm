@@ -6,41 +6,47 @@ import numpy as np
 import torch.nn.functional as F
 
 
-class BertEmbeddings(torch.nn.Module):
-    def __init__(self, n_embed, n_rows, n_columns):  # , max_seq_len=16):
-        '''Note: one embedding dimension will represent nan_mask
+class TabEmbeddings(torch.nn.Module):
+    def __init__(self, n_embed):  # , max_seq_len=16):
+        '''
+        Original values will be linearly projected to multiple dimensions
+        One embedding dimension will represent nan_mask,
+        Two embedding dimensions will represent positional embeddings (row/col indexes)
         '''
         super().__init__()
-        self.word_embeddings = torch.nn.Linear(1, n_embed - 3)
+        self.val_embeddings = torch.nn.Linear(1, n_embed - 3)
 
         self.layer_norm = torch.nn.LayerNorm(
             n_embed, eps=1e-12, elementwise_affine=True)
         self.dropout = torch.nn.Dropout(p=0.1, inplace=False)
 
-        # pre-generate positional embeddings
-        col_tensor = torch.tile(torch.Tensor(
-            np.arange(n_columns)), (n_rows, 1))
-        col_tensor = ((col_tensor - col_tensor.mean()) /
-                      col_tensor.std())
-        self.col_tensor = col_tensor.flatten()
-
-        row_tensor = torch.tile(torch.Tensor(
-            np.arange(n_rows)), (n_columns, 1)).T
-        row_tensor = ((row_tensor - row_tensor.mean()) /
-                      row_tensor.std())
-        self.row_tensor = row_tensor.flatten()
-
-    def forward(self, x: torch.Tensor, nan_mask: torch.Tensor):
-        # x is (batch_size, seq_len)
-        # seq_len is the flattened matrix
-
-        # words_embeddings are (batch_size, seq_len, n_embed)
-        embeddings = self.word_embeddings(x.unsqueeze(-1))
+    def forward(self, x: torch.Tensor, nan_mask: torch.Tensor, n_rows, n_columns):
+        '''
+        Params
+        ------
+        x: torch.Tensor
+            input tensor of shape (batch_size, seq_len)
+            seq_len is the flattened matrix
+        '''
+        # val_embeddings are (batch_size, seq_len, n_embed)
+        embeddings = self.val_embeddings(x.unsqueeze(-1))
 
         # append nan_mask (batch_size, seq_len) to embeddings, resulting in (batch_size, seq_len, n_embed + 1)
         embeddings = torch.cat([embeddings, nan_mask.unsqueeze(-1)], dim=-1)
 
-        # append positional embeddings
+        # append positional embeddings (batch_size, seq_len)
+        # one embedding dimension will represent the column number
+        # one embedding dimension will represent the row number
+        col_tensor = torch.tile(torch.Tensor(
+            np.arange(n_columns)), (n_rows, 1))
+        col_tensor = ((col_tensor - col_tensor.mean()) /
+                      col_tensor.std())
+        self.col_tensor = col_tensor.flatten()  # (seq_len)
+        row_tensor = torch.tile(torch.Tensor(
+            np.arange(n_rows)), (n_columns, 1)).T
+        row_tensor = ((row_tensor - row_tensor.mean()) /
+                      row_tensor.std())
+        self.row_tensor = row_tensor.flatten()  # (seq_len)
         col_tensor = self.col_tensor.repeat(x.shape[0], 1).to(x.device)
         row_tensor = self.row_tensor.repeat(x.shape[0], 1).to(x.device)
         embeddings = torch.cat([embeddings, col_tensor.unsqueeze(-1)], dim=-1)
@@ -53,7 +59,7 @@ class BertEmbeddings(torch.nn.Module):
         return embeddings
 
 
-class BertAttentionHead(torch.nn.Module):
+class TabAttentionHead(torch.nn.Module):
     """
     A single attention head in MultiHeaded Self Attention layer.
     The idea is identical to the original paper ("Attention is all you need"),
@@ -72,7 +78,7 @@ class BertAttentionHead(torch.nn.Module):
 
         self.dropout = torch.nn.Dropout(dropout)
 
-    def forward(self, x, mask):
+    def forward(self, x, att_mask):
         # B, Seq_len, N_embed
         B, seq_len, n_embed = x.shape
 
@@ -83,7 +89,7 @@ class BertAttentionHead(torch.nn.Module):
         weights = (q @ k.transpose(-2, -1)) / \
             math.sqrt(n_embed)  # (B, Seq_len, Seq_len)
         # mask out not attended tokens
-        weights = weights.masked_fill(mask == 0, -1e9)
+        weights = weights.masked_fill(att_mask == 0, -1e9)
 
         scores = F.softmax(weights, dim=-1)
         scores = self.dropout(scores)
@@ -93,7 +99,7 @@ class BertAttentionHead(torch.nn.Module):
         return context
 
 
-class BertSelfAttention(torch.nn.Module):
+class TabSelfAttention(torch.nn.Module):
     """
     MultiHeaded Self-Attention mechanism as described in "Attention is all you need"
     """
@@ -106,15 +112,15 @@ class BertSelfAttention(torch.nn.Module):
         n_heads = n_heads
 
         self.heads = torch.nn.ModuleList(
-            [BertAttentionHead(head_size, dropout, n_embed) for _ in range(n_heads)])
+            [TabAttentionHead(head_size, dropout, n_embed) for _ in range(n_heads)])
 
         # project from multiple heads to the single space
         self.proj = torch.nn.Linear(head_size * n_heads, n_embed)
 
         self.dropout = torch.nn.Dropout(dropout)
 
-    def forward(self, x, mask):
-        context = torch.cat([head(x, mask) for head in self.heads], dim=-1)
+    def forward(self, x, att_mask):
+        context = torch.cat([head(x, att_mask) for head in self.heads], dim=-1)
 
         proj = self.proj(context)
 
@@ -140,7 +146,7 @@ class FeedForward(torch.nn.Module):
         return out
 
 
-class BertLayer(torch.nn.Module):
+class TabLayer(torch.nn.Module):
     """
     Single layer of BERT transformer model
     """
@@ -148,14 +154,14 @@ class BertLayer(torch.nn.Module):
     def __init__(self, n_heads=1, dropout=0.1, n_embed=3):
         super().__init__()
         self.layer_norm1 = torch.nn.LayerNorm(n_embed)
-        self.self_attention = BertSelfAttention(n_heads, dropout, n_embed)
+        self.self_attention = TabSelfAttention(n_heads, dropout, n_embed)
 
         self.layer_norm2 = torch.nn.LayerNorm(n_embed)
         self.feed_forward = FeedForward(dropout, n_embed)
 
-    def forward(self, x, mask):
+    def forward(self, x, att_mask):
         x = self.layer_norm1(x)
-        x = x + self.self_attention(x, mask)
+        x = x + self.self_attention(x, att_mask)
 
         x = self.layer_norm2(x)
         out = x + self.feed_forward(x)
@@ -163,29 +169,26 @@ class BertLayer(torch.nn.Module):
         return out
 
 
-class BertEncoder(torch.nn.Module):
+class TabEncoder(torch.nn.Module):
     def __init__(self, n_layers=2, n_heads=1, dropout=0.1, n_embed=3):
         super().__init__()
 
         self.layers = torch.nn.ModuleList(
-            [BertLayer(n_heads, dropout, n_embed) for _ in range(n_layers)])
+            [TabLayer(n_heads, dropout, n_embed) for _ in range(n_layers)])
 
-    def forward(self, x, mask):
+    def forward(self, x, att_mask):
         for layer in self.layers:
-            x = layer(x, mask)
+            x = layer(x, att_mask)
 
         return x
 
 
-class NanoBERT(torch.nn.Module):
+class TabLLM(torch.nn.Module):
     """
-    NanoBERT is a almost an exact copy of a transformer encoder part described in the paper "Attention is all you need"
-    This is a base model that can be used for various purposes such as Masked Language Modelling, Classification,
-    Or any other kind of NLP tasks.
-    This implementation does not cover the Seq2Seq problem, but can be easily extended to that.
+    BERT-style encoder
     """
 
-    def __init__(self, n_layers=2, n_heads=1, dropout=0.1, n_embed=3, n_rows=10, n_columns=10):
+    def __init__(self, n_layers=2, n_heads=1, dropout=0.1, n_embed=3):
         """
         Params
         ------
@@ -197,22 +200,17 @@ class NanoBERT(torch.nn.Module):
             hidden dropout of the BERT model (default=0.1)
         n_embed: int
             hidden embeddings dimensionality (default=3)
-        n_rows: int
-            number of rows in the input matrix
-        n_columns: int
-            number of columns in the input matrix
         """
         super().__init__()
 
-        self.embedding = BertEmbeddings(n_embed, n_rows, n_columns)
+        self.embedding = TabEmbeddings(n_embed)
 
-        self.encoder = BertEncoder(n_layers, n_heads, dropout, n_embed)
+        self.encoder = TabEncoder(n_layers, n_heads, dropout, n_embed)
 
         self.predictor = torch.nn.Linear(in_features=n_embed, out_features=1)
-        self.n_rows = n_rows
-        self.n_columns = n_columns
 
-    def forward(self, x: torch.Tensor, nan_mask: torch.Tensor):
+    def forward(self, x: torch.Tensor, nan_mask: torch.Tensor, att_mask: torch.Tensor,
+                n_rows: int, n_columns: int):
         '''
         Params
         ------
@@ -222,16 +220,23 @@ class NanoBERT(torch.nn.Module):
         nan_mask: torch.Tensor
             nan_mask is the same shape as x,
             but with 1s where x is nan and 0s elsewhere
+        att_mask: torch.Tensor
+            attention mask for padded tokens
+            (batch_size, seq_len, seq_len)
+        n_rows: int
+            number of rows in the input matrix
+        n_columns: int
+            number of columns in the input matrix
         '''
 
         # attention masking for padded token
         # (batch_size, seq_len, seq_len)
-        mask = (x > 0).unsqueeze(1).repeat(1, x.size(1), 1)
+        att_mask = (x > 0).unsqueeze(1).repeat(1, x.size(1), 1)
 
         # embeddings become (batch_size, seq_len, n_embed)
-        embeddings = self.embedding(x, nan_mask)
+        embeddings = self.embedding(x, nan_mask, n_rows, n_columns)
 
-        encoded = self.encoder(embeddings, mask)
+        encoded = self.encoder(embeddings, att_mask)
 
         predictions = self.predictor(encoded).squeeze(-1)
         return predictions
