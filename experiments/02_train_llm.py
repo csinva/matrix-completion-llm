@@ -20,47 +20,51 @@ import torch.utils.data as data
 path_to_repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+# decent test script
+# python experiments/02_train_llm.py --n_rows_list 8 --n_columns_list 5 --rank_list 1 --lr 1e-3 --batch_size 1024 --frac_nan_mask 0.1 --n_layers 4 --n_heads 4 --n_embed 12
+
+
 def add_main_args(parser):
     """Caching uses the non-default values from argparse to name the saving directory.
     Changing the default arg an argument will break cache compatibility with previous runs.
     """
 
     # data args
-    parser.add_argument('--n_rows_list', default=range(5, 20),
-                        type=list, help='Number of rows')
-    parser.add_argument('--n_columns_list', default=range(5, 20),
-                        type=list, help='Number of columns')
-    parser.add_argument('--rank_list', default=range(1, 5),
-                        type=int, help='Rank')
+    parser.add_argument('--n_rows_list', default=range(8, 9),  # (5, 20)
+                        type=int, nargs='+', help='Number of rows')
+    parser.add_argument('--n_columns_list', default=range(5, 6),  # (5, 20)
+                        type=int, nargs='+', help='Number of columns')
+    parser.add_argument('--rank_list', default=range(1, 2),  # (1, 5)
+                        type=int, nargs='+', help='Rank')
     parser.add_argument('--n_matrices_test', default=32768,
                         type=int, help='Number of matrices to put before printing (each matrix is newly generated)')
 
     # training args
-    parser.add_argument('--frac_nan_mask', default=[0.025, 0.05, 0.1],
-                        type=float, help='Fraction of NaN mask')
+    parser.add_argument('--lr', default=1e-3, type=float,  # 1e-3
+                        help='Learning rate')
+    parser.add_argument('--batch_size', default=1024,
+                        type=int, help='Batch size')
+    parser.add_argument('--frac_nan_mask', default=[0.1],  # 0.025, 0.05, 0.1
+                        type=float, nargs='+', help='Fraction of NaN mask')
     parser.add_argument('--seed', default=13, type=int, help='Seed')
     parser.add_argument('--num_epochs', default=100000,
                         type=int, help='Number of epochs')
-    parser.add_argument('--lr', default=1e-3, type=float, help='Learning rate')
-    parser.add_argument('--batch_size', default=256,
-                        type=int, help='Batch size')
+    parser.add_argument("--save_dir", type=str,
+                        default=join(path_to_repo, "results"),
+                        help="directory for saving")
 
     # model args
-    parser.add_argument('--n_layers', default=8,
+    parser.add_argument('--n_layers', default=4,  # 8
                         type=int, help='Number of layers')
-    parser.add_argument('--n_heads', default=8,
+    parser.add_argument('--n_heads', default=4,  # 8
                         type=int, help='Number of heads')
-    parser.add_argument('--n_embed', default=96,
+    parser.add_argument('--n_embed', default=12,  # 96
                         type=int, help='Embedding size')
     parser.add_argument('--dropout', default=0,
                         type=float, help='Dropout rate')
+    parser.add_argument('--use_rowcol_attn', default=1, type=int, choices=[0, 1],
+                        help='Whether to use row/column attention (otherwise use full attention)')
 
-    parser.add_argument(
-        "--save_dir",
-        type=str,
-        default=join(path_to_repo, "results"),
-        help="directory for saving",
-    )
     return parser
 
 
@@ -82,7 +86,7 @@ def add_computational_args(parser):
     parser.add_argument(
         '--use_data_parallel',
         type=int,
-        default=1,
+        default=0,
         choices=[0, 1],
         help='whether to use data parallel',
     )
@@ -122,10 +126,14 @@ if __name__ == "__main__":
 
     # get data
     logging.info('generating data...')
-    dataset = LowRankDataset(args.n_rows_list, args.n_columns_list, args.rank_list, args.frac_nan_mask,
-                             seed=args.seed, length=args.batch_size * 1, randomize=True)
-    dataset_test = LowRankDataset(args.n_rows_list, args.n_columns_list, args.rank_list, args.frac_nan_mask,
-                                  seed=args.seed + 1, length=args.n_matrices_test, randomize=False)
+    dataset = LowRankDataset(
+        args.n_rows_list, args.n_columns_list, args.rank_list, args.frac_nan_mask,
+        use_rowcol_attn=args.use_rowcol_attn,
+        seed=args.seed, length=args.batch_size * 16, randomize=True)
+    dataset_test = LowRankDataset(
+        args.n_rows_list, args.n_columns_list, args.rank_list, args.frac_nan_mask,
+        use_rowcol_attn=args.use_rowcol_attn,
+        seed=args.seed + 1, length=args.n_matrices_test, randomize=False)
     dataloader = data.DataLoader(
         dataset, batch_size=args.batch_size, shuffle=True)
     dataloader_test = data.DataLoader(
@@ -139,7 +147,10 @@ if __name__ == "__main__":
     # get model and optimizer
     logging.info('loading model.....')
     llm = TabLLM(
-        n_embed=args.n_embed, n_layers=args.n_layers, n_heads=args.n_heads, dropout=args.dropout).to(args.device)
+        n_embed=args.n_embed, n_layers=args.n_layers,
+        n_heads=args.n_heads, dropout=args.dropout,
+        use_pos_embeddings=not args.use_rowcol_attn,
+    ).to(args.device)
     if args.use_data_parallel:
         llm = torch.nn.DataParallel(llm, device_ids=[0, 1, 2, 3])
     optimizer = torch.optim.Adam(llm.parameters(), lr=args.lr)

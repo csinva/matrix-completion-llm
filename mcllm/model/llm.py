@@ -7,15 +7,19 @@ import torch.nn.functional as F
 
 
 class TabEmbeddings(torch.nn.Module):
-    def __init__(self, n_embed):
+    def __init__(self, n_embed, use_pos_embeddings=True):
         '''
         Original values will be linearly projected to multiple dimensions
         1 emb dim will represent nan_mask
-        2 emb dims will represent positional embeddings (row/col indexes)
+        If use_pos_embeddings is True,
+            2 emb dims will represent positional embeddings (row/col indexes)
         '''
         super().__init__()
-        self.val_embeddings = torch.nn.Linear(1, n_embed - 3)
-
+        self.use_pos_embeddings = use_pos_embeddings
+        if use_pos_embeddings:
+            self.val_embeddings = torch.nn.Linear(1, n_embed - 3)
+        else:
+            self.val_embeddings = torch.nn.Linear(1, n_embed - 1)
         self.layer_norm = torch.nn.LayerNorm(
             n_embed, eps=1e-12, elementwise_affine=True)
         self.dropout = torch.nn.Dropout(p=0.1, inplace=False)
@@ -35,21 +39,24 @@ class TabEmbeddings(torch.nn.Module):
         embeddings = torch.cat([embeddings, nan_mask.unsqueeze(-1)], dim=-1)
 
         # append positional embeddings (batch_size, seq_len)
-        # one embedding dimension represents the column number, another dimension represents the row
-        col_tensor = torch.tile(torch.Tensor(
-            np.arange(n_columns)), (n_rows, 1))
-        col_tensor = ((col_tensor - col_tensor.mean()) /
-                      col_tensor.std())
-        self.col_tensor = col_tensor.flatten()  # (seq_len)
-        row_tensor = torch.tile(torch.Tensor(
-            np.arange(n_rows)), (n_columns, 1)).T
-        row_tensor = ((row_tensor - row_tensor.mean()) /
-                      row_tensor.std())
-        self.row_tensor = row_tensor.flatten()  # (seq_len)
-        col_tensor = self.col_tensor.repeat(x.shape[0], 1).to(x.device)
-        row_tensor = self.row_tensor.repeat(x.shape[0], 1).to(x.device)
-        embeddings = torch.cat([embeddings, col_tensor.unsqueeze(-1)], dim=-1)
-        embeddings = torch.cat([embeddings, row_tensor.unsqueeze(-1)], dim=-1)
+        if self.use_pos_embeddings:
+            # one embedding dimension represents the column number, another dimension represents the row
+            col_tensor = torch.tile(torch.Tensor(
+                np.arange(n_columns)), (n_rows, 1))
+            col_tensor = ((col_tensor - col_tensor.mean()) /
+                          col_tensor.std())
+            self.col_tensor = col_tensor.flatten()  # (seq_len)
+            row_tensor = torch.tile(torch.Tensor(
+                np.arange(n_rows)), (n_columns, 1)).T
+            row_tensor = ((row_tensor - row_tensor.mean()) /
+                          row_tensor.std())
+            self.row_tensor = row_tensor.flatten()  # (seq_len)
+            col_tensor = self.col_tensor.repeat(x.shape[0], 1).to(x.device)
+            row_tensor = self.row_tensor.repeat(x.shape[0], 1).to(x.device)
+            embeddings = torch.cat(
+                [embeddings, col_tensor.unsqueeze(-1)], dim=-1)
+            embeddings = torch.cat(
+                [embeddings, row_tensor.unsqueeze(-1)], dim=-1)
 
         # normalize
         embeddings = self.layer_norm(embeddings)
@@ -58,17 +65,79 @@ class TabEmbeddings(torch.nn.Module):
         return embeddings
 
 
-class TabSelfAttention(torch.nn.Module):
-    def __init__(self, n_heads=1, dropout=0.1, n_embed=3):
+# class TabSelfAttention(torch.nn.Module):
+#     def __init__(self, n_heads=1, dropout=0.1, n_embed=3):
+#         super().__init__()
+#         self.mha = torch.nn.MultiheadAttention(
+#             embed_dim=n_embed, num_heads=n_heads, dropout=dropout, batch_first=True)
+#         self.proj = torch.nn.Linear(n_embed, n_embed)
+#         self.dropout = torch.nn.Dropout(dropout)
+
+#     def forward(self, x, att_mask):
+#         context, _ = self.mha(x, x, x, key_padding_mask=att_mask)
+#         proj = self.proj(context)
+#         out = self.dropout(proj)
+#         return out
+
+class TabAttentionHead(torch.nn.Module):
+    def __init__(self, head_size, dropout=0.1, n_embed=3):
         super().__init__()
-        self.mha = torch.nn.MultiheadAttention(
-            embed_dim=n_embed, num_heads=n_heads, dropout=dropout, batch_first=True)
-        self.proj = torch.nn.Linear(n_embed, n_embed)
+
+        self.query = torch.nn.Linear(
+            in_features=n_embed, out_features=head_size)
+        self.key = torch.nn.Linear(in_features=n_embed, out_features=head_size)
+        self.values = torch.nn.Linear(
+            in_features=n_embed, out_features=head_size)
+
         self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x, att_mask):
-        context, _ = self.mha(x, x, x, key_padding_mask=att_mask)
-        proj = self.proj(context)
+        '''
+        Params
+        ------
+        x: torch.Tensor
+            input tensor of shape (batch_size, seq_len, n_embed)
+        '''
+        batch_size, seq_len, n_embed = x.shape
+
+        # these are all (batch_size, seq_len, head_size)
+        q = self.query(x)
+        k = self.key(x)
+        v = self.values(x)
+
+        # this becomes (batch_size, seq_len, seq_len)
+        weights = (q @ k.transpose(-2, -1)) / math.sqrt(n_embed)
+        # mask out not attended tokens
+        weights = weights.masked_fill(att_mask == 0, -1e9)
+
+        # this is (batch_size, seq_len, seq_len)
+        scores = F.softmax(weights, dim=-1)
+        scores = self.dropout(scores)
+
+        # final output is (batch_size, seq_len, head_size)
+        out = scores @ v
+        return out
+
+
+class TabSelfAttention(torch.nn.Module):
+    def __init__(self, n_heads=1, dropout=0.1, n_embed=3):
+        super().__init__()
+        head_size = n_embed // n_heads
+        n_heads = n_heads
+        if not head_size * n_heads == n_embed:
+            raise ValueError('n_embed should be divisible by n_heads')
+
+        self.heads = torch.nn.ModuleList(
+            [TabAttentionHead(head_size, dropout, n_embed) for _ in range(n_heads)])
+
+        # project from multiple heads to the embedding space
+        self.proj = torch.nn.Linear(head_size * n_heads, n_embed)
+
+        self.dropout = torch.nn.Dropout(dropout)
+
+    def forward(self, x, att_mask):
+        v = torch.cat([head(x, att_mask) for head in self.heads], dim=-1)
+        proj = self.proj(v)
         out = self.dropout(proj)
         return out
 
@@ -115,7 +184,7 @@ class TabLLM(torch.nn.Module):
     """BERT-style encoder
     """
 
-    def __init__(self, n_layers=2, n_heads=3, dropout=0.1, n_embed=10):
+    def __init__(self, n_layers=2, n_heads=3, dropout=0.1, n_embed=10, use_pos_embeddings=True):
         """
         Params
         ------
@@ -127,10 +196,12 @@ class TabLLM(torch.nn.Module):
             hidden dropout of the BERT model (default=0.1)
         n_embed: int
             hidden embeddings dimensionality (default=3)
+        use_pos_embeddings: bool
+            whether to use positional embeddings (default=True)
         """
         super().__init__()
 
-        self.embedding = TabEmbeddings(n_embed)
+        self.embedding = TabEmbeddings(n_embed, use_pos_embeddings)
 
         self.tab_layers = torch.nn.ModuleList(
             [TabLayer(n_heads, dropout, n_embed) for _ in range(n_layers)])

@@ -15,8 +15,14 @@ class LowRankDataset(data.Dataset):
         Decides whether the same matrix should be returned at the same index every time
     '''
 
-    def __init__(self, m_list: List[int], n_list: List[int], rank_list: List[int],
-                 frac_nan_mask_list: List[float], length=100, seed=13, randomize=False):
+    def __init__(self,
+                 m_list: List[int],
+                 n_list: List[int],
+                 rank_list: List[int],
+                 frac_nan_mask_list: List[float],
+                 use_rowcol_attn: bool = False,
+                 length=100, seed=13, randomize=False
+                 ):
         self.m_list = m_list
         self.n_list = n_list
         self.m_max = max(m_list)
@@ -26,6 +32,7 @@ class LowRankDataset(data.Dataset):
         self.seed = seed
         self.length = length
         self.randomize = randomize
+        self.use_rowcol_attn = use_rowcol_attn
 
     def __len__(self):
         return self.length
@@ -56,10 +63,26 @@ class LowRankDataset(data.Dataset):
         x = (x - x.mean(axis=1).reshape(-1, 1)) / x.std(axis=1).reshape(-1, 1)
         x_full[:m, :n] = x
 
-        # attention mask
-        att_mask = np.zeros_like(x_full)
-        att_mask[:m, :n] = 1
-        att_mask = att_mask.flatten()
+        seq_len = self.n_max * self.m_max
+        if self.use_rowcol_attn:
+            att_mask_kernel = np.zeros((seq_len, seq_len))
+            for i in range(seq_len):
+                r_idx_row = i // self.m_max
+                c_idx_row = i % self.m_max
+                for j in range(seq_len):
+                    r_idx_col = j // self.m_max
+                    c_idx_col = j % self.m_max
+                    if r_idx_row == r_idx_col or c_idx_row == c_idx_col:
+                        att_mask_kernel[i, j] = 1
+        else:
+            # attention mask for full attention (seq_len, seq_len)
+            att_mask = np.zeros((self.m_max, self.n_max))
+            att_mask[:m, :n] = 1
+            att_mask = att_mask.flatten()
+            # pytorch mha implementation only uses att_mask (just seq_len)
+            att_mask_kernel = np.ones((seq_len, seq_len))
+            att_mask_kernel[~att_mask.astype(bool)] = 0
+            att_mask_kernel[:, ~att_mask.astype(bool)] = 0
 
         # nan mask - randomly mask some frac
         # only mask values in first m rows and first n cols
@@ -72,8 +95,7 @@ class LowRankDataset(data.Dataset):
         x_clean_t = torch.Tensor(x_full)
         x_nan_t = x_clean_t.clone()
         x_nan_t[nan_mask_t.bool()] = 0
-        att_mask_t = torch.Tensor(att_mask)
-        # print('shapes data', x_nan_t.shape, att_mask_t.shape)
+        att_mask_t = torch.Tensor(att_mask_kernel)
 
         return x_nan_t, x_clean_t, nan_mask_t, att_mask_t
 
