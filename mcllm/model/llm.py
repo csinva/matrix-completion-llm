@@ -135,7 +135,7 @@ class TabLLM(torch.nn.Module):
         self.tab_layers = torch.nn.ModuleList(
             [TabLayer(n_heads, dropout, n_embed) for _ in range(n_layers)])
 
-        self.predictor = torch.nn.Linear(in_features=n_embed, out_features=1)
+        self.unembedding = torch.nn.Linear(in_features=n_embed, out_features=1)
 
     def forward(self, x: torch.Tensor, nan_mask: torch.Tensor, att_mask: torch.Tensor,
                 n_rows: int, n_columns: int):
@@ -165,5 +165,5 @@ class TabLLM(torch.nn.Module):
             x = layer(x, att_mask)
 
         # project embedding size to scalar matrix
-        predictions = self.predictor(x).squeeze(-1)
+        predictions = self.unembedding(x).squeeze(-1)
         return predictions
