@@ -16,13 +16,13 @@ class LowRankDataset(data.Dataset):
     '''
 
     def __init__(self, m_list: List[int], n_list: List[int], rank_list: List[int],
-                 frac_nan_mask: float, length=100, seed=13, randomize=False):
+                 frac_nan_mask_list: List[float], length=100, seed=13, randomize=False):
         self.m_list = m_list
         self.n_list = n_list
         self.m_max = max(m_list)
         self.n_max = max(n_list)
         self.rank_list = rank_list
-        self.frac_nan_mask = frac_nan_mask
+        self.frac_nan_mask_list = frac_nan_mask_list
         self.seed = seed
         self.length = length
         self.randomize = randomize
@@ -30,7 +30,7 @@ class LowRankDataset(data.Dataset):
     def __len__(self):
         return self.length
 
-    def create_low_rank_matrix(self, m, n, rank, seed=13, idx=None):
+    def create_low_rank_matrix(self, m, n, rank):
         rng = self.rng
         # A = rng.normal(size=(m, rank)) @ rng.normal(size=(rank, n))
         A = rng.uniform(size=(m, rank)) @ rng.uniform(size=(rank, n))
@@ -49,6 +49,7 @@ class LowRankDataset(data.Dataset):
         n = self.rng.choice(self.n_list)
         rank_list_filt = [r for r in self.rank_list if r < min(m, n) - 1]
         rank = self.rng.choice(rank_list_filt)
+        frac_nan_mask = self.rng.choice(self.frac_nan_mask_list)
 
         # create matrix
         x = self.create_low_rank_matrix(m, n, rank)
@@ -62,7 +63,7 @@ class LowRankDataset(data.Dataset):
 
         # nan mask - randomly mask some frac
         # only mask values in first m rows and first n cols
-        nan_mask_mini = self.rng.binomial(1, self.frac_nan_mask, size=(m, n))
+        nan_mask_mini = self.rng.binomial(1, frac_nan_mask, size=(m, n))
         nan_mask = np.zeros_like(x_full)
         nan_mask[:m, :n] = nan_mask_mini
         nan_mask_t = torch.Tensor(nan_mask).flatten()

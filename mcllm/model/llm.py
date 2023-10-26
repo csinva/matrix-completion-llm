@@ -10,8 +10,8 @@ class TabEmbeddings(torch.nn.Module):
     def __init__(self, n_embed):
         '''
         Original values will be linearly projected to multiple dimensions
-        One embedding dimension will represent nan_mask,
-        Two embedding dimensions will represent positional embeddings (row/col indexes)
+        1 emb dim will represent nan_mask
+        2 emb dims will represent positional embeddings (row/col indexes)
         '''
         super().__init__()
         self.val_embeddings = torch.nn.Linear(1, n_embed - 3)
@@ -90,8 +90,7 @@ class FeedForward(torch.nn.Module):
 
 
 class TabLayer(torch.nn.Module):
-    """
-    Single layer of BERT transformer model
+    """Single layer of tabular self-attention
     """
 
     def __init__(self, n_heads=1, dropout=0.1, n_embed=3):

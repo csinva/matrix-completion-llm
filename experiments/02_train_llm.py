@@ -1,5 +1,5 @@
 import torch
-import mcllm.data.imodels
+from tqdm import tqdm
 from mcllm.data.synthetic import LowRankDataset
 from mcllm.model.llm import TabLLM
 import mcllm.model.model
@@ -10,13 +10,11 @@ import random
 from collections import defaultdict
 from os.path import join
 import numpy as np
-from sklearn.metrics import accuracy_score, roc_auc_score
-from sklearn.model_selection import train_test_split
 import joblib
-import imodels
 import torch.nn.functional as F
 import os.path
 import imodelsx.cache_save_utils
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.utils.data as data
 # python experiments/02_train_llm.py --use_data_parallel 0 --rank 1 --n_matrices=1024
 path_to_repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,33 +26,34 @@ def add_main_args(parser):
     """
 
     # data args
-    parser.add_argument('--n_rows_list', default=range(5, 12),
+    parser.add_argument('--n_rows_list', default=range(5, 20),
                         type=list, help='Number of rows')
-    parser.add_argument('--n_columns_list', default=range(5, 12),
+    parser.add_argument('--n_columns_list', default=range(5, 20),
                         type=list, help='Number of columns')
-    parser.add_argument('--rank_list', default=[1, 2], type=int, help='Rank')
+    parser.add_argument('--rank_list', default=range(1, 5),
+                        type=int, help='Rank')
     parser.add_argument('--n_matrices_test', default=32768,
                         type=int, help='Number of matrices to put before printing (each matrix is newly generated)')
 
     # training args
-    parser.add_argument('--frac_nan_mask', default=0.05,
+    parser.add_argument('--frac_nan_mask', default=[0.025, 0.05, 0.1],
                         type=float, help='Fraction of NaN mask')
     parser.add_argument('--seed', default=13, type=int, help='Seed')
-    parser.add_argument('--num_epochs', default=10000,
+    parser.add_argument('--num_epochs', default=100000,
                         type=int, help='Number of epochs')
     parser.add_argument('--lr', default=1e-3, type=float, help='Learning rate')
-    parser.add_argument('--batch_size', default=1024,
+    parser.add_argument('--batch_size', default=256,
                         type=int, help='Batch size')
 
     # model args
-    parser.add_argument('--n_layers', default=3,
+    parser.add_argument('--n_layers', default=8,
                         type=int, help='Number of layers')
-    parser.add_argument('--n_heads', default=3,
+    parser.add_argument('--n_heads', default=8,
                         type=int, help='Number of heads')
+    parser.add_argument('--n_embed', default=96,
+                        type=int, help='Embedding size')
     parser.add_argument('--dropout', default=0,
                         type=float, help='Dropout rate')
-    parser.add_argument('--n_embed', default=12,
-                        type=int, help='Embedding size')
 
     parser.add_argument(
         "--save_dir",
@@ -67,6 +66,12 @@ def add_main_args(parser):
 
 def add_computational_args(parser):
     """Arguments that only affect computation and not the results (shouldnt use when checking cache)"""
+    parser.add_argument(
+        '--save_freq',
+        type=int,
+        default=10,
+        help='how often to save model and results (only saves if improvement)',
+    )
     parser.add_argument(
         "--use_cache",
         type=int,
@@ -118,26 +123,33 @@ if __name__ == "__main__":
     # get data
     logging.info('generating data...')
     dataset = LowRankDataset(args.n_rows_list, args.n_columns_list, args.rank_list, args.frac_nan_mask,
-                             seed=args.seed, length=args.batch_size * 16, randomize=True)
+                             seed=args.seed, length=args.batch_size * 1, randomize=True)
     dataset_test = LowRankDataset(args.n_rows_list, args.n_columns_list, args.rank_list, args.frac_nan_mask,
                                   seed=args.seed + 1, length=args.n_matrices_test, randomize=False)
-
-    logging.info('loading model.....')
-    llm = TabLLM(
-        n_embed=args.n_embed, n_layers=args.n_layers, n_heads=args.n_heads, dropout=args.dropout).to(args.device)
-
-    if args.use_data_parallel:
-        llm = torch.nn.DataParallel(llm, device_ids=[0, 1, 2, 3])
-    optimizer = torch.optim.Adam(llm.parameters(), lr=args.lr)
     dataloader = data.DataLoader(
         dataset, batch_size=args.batch_size, shuffle=True)
     dataloader_test = data.DataLoader(
         dataset_test, batch_size=args.batch_size * 2, shuffle=False)
 
+    # set up saving dictionary + save params file
+    r = defaultdict(list)
+    r.update(vars(args))
+    r["save_dir_unique"] = save_dir_unique
+
+    # get model and optimizer
+    logging.info('loading model.....')
+    llm = TabLLM(
+        n_embed=args.n_embed, n_layers=args.n_layers, n_heads=args.n_heads, dropout=args.dropout).to(args.device)
+    if args.use_data_parallel:
+        llm = torch.nn.DataParallel(llm, device_ids=[0, 1, 2, 3])
+    optimizer = torch.optim.Adam(llm.parameters(), lr=args.lr)
+    scheduler = ReduceLROnPlateau(optimizer, 'min')
+
     train_losses = []
     test_losses = []
+    best_saved_test_loss = 1e10
     logging.info('starting training...')
-    for i in range(args.num_epochs):
+    for i in tqdm(range(args.num_epochs)):
 
         # train and compute train loss
         llm.train()
@@ -148,7 +160,7 @@ if __name__ == "__main__":
             x_clean_t = x_clean_t.to(args.device)
             nan_mask_t = nan_mask_t.to(args.device)
             att_mask_t = att_mask_t.to(args.device)
-
+            # with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
             pred = llm(x_nan_t, nan_mask_t, att_mask_t,
                        n_rows=max(args.n_rows_list), n_columns=max(args.n_columns_list))
             nan_loss = F.mse_loss(
@@ -187,22 +199,27 @@ if __name__ == "__main__":
             n_masked += nan_mask_t.sum().item()
 
         test_loss /= n_masked
+        scheduler.step(test_loss)
         if i == 0:
             print('~Baseline loss', torch.abs(
                 x_clean_t[nan_mask_t.bool()]).mean().item())
         print(f'{i} -- Test loss {test_loss}')
         test_losses.append(test_loss)
 
-    # set up saving dictionary + save params file
-    r = defaultdict(list)
-    r.update(vars(args))
-    r["save_dir_unique"] = save_dir_unique
-    r['train_losses'] = train_losses
+        if i > 5 and i % args.save_freq == 0:
+            os.makedirs(save_dir_unique, exist_ok=True)
+            r['train_losses'] = train_losses
+            r['test_losses'] = test_losses
 
-    # save results
-    os.makedirs(save_dir_unique, exist_ok=True)
-    joblib.dump(
-        r, join(save_dir_unique, "results.pkl")
-    )
-    torch.save(llm.state_dict(), join(save_dir_unique, "model.pkl"))
+            # save results
+            if test_loss < best_saved_test_loss:
+                best_saved_test_loss = test_loss
+                r['best_saved_test_loss'] = best_saved_test_loss
+                r['best_saved_idx'] = i
+                joblib.dump(
+                    r, join(save_dir_unique, "results.pkl")
+                )
+                torch.save(llm.state_dict(), join(
+                    save_dir_unique, "model.pkl"))
+
     logging.info("Succesfully completed :)\n\n")
