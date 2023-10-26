@@ -7,7 +7,7 @@ import torch.nn.functional as F
 
 
 class TabEmbeddings(torch.nn.Module):
-    def __init__(self, n_embed):  # , max_seq_len=16):
+    def __init__(self, n_embed):
         '''
         Original values will be linearly projected to multiple dimensions
         One embedding dimension will represent nan_mask,
@@ -35,8 +35,7 @@ class TabEmbeddings(torch.nn.Module):
         embeddings = torch.cat([embeddings, nan_mask.unsqueeze(-1)], dim=-1)
 
         # append positional embeddings (batch_size, seq_len)
-        # one embedding dimension will represent the column number
-        # one embedding dimension will represent the row number
+        # one embedding dimension represents the column number, another dimension represents the row
         col_tensor = torch.tile(torch.Tensor(
             np.arange(n_columns)), (n_rows, 1))
         col_tensor = ((col_tensor - col_tensor.mean()) /
@@ -68,7 +67,7 @@ class TabSelfAttention(torch.nn.Module):
         self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x, att_mask):
-        context, _ = self.mha(x, x, x)  # , key_padding_mask=att_mask)
+        context, _ = self.mha(x, x, x, key_padding_mask=att_mask)
         proj = self.proj(context)
         out = self.dropout(proj)
         return out
@@ -114,8 +113,7 @@ class TabLayer(torch.nn.Module):
 
 
 class TabLLM(torch.nn.Module):
-    """
-    BERT-style encoder
+    """BERT-style encoder
     """
 
     def __init__(self, n_layers=2, n_heads=3, dropout=0.1, n_embed=10):
@@ -152,8 +150,8 @@ class TabLLM(torch.nn.Module):
             nan_mask is the same shape as x,
             but with 1s where x is nan and 0s elsewhere
         att_mask: torch.Tensor
-            attention mask for padded tokens
-            (batch_size, seq_len, seq_len)
+            attention mask is the same shape as x,
+            but with 1s where x should be attended and 0 elsewhere
         n_rows: int
             number of rows in the input matrix
         n_columns: int

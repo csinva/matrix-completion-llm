@@ -28,11 +28,11 @@ def add_main_args(parser):
     """
 
     # data args
-    parser.add_argument('--n_rows', default=8,
-                        type=int, help='Number of rows')
-    parser.add_argument('--n_columns', default=6,
-                        type=int, help='Number of columns')
-    parser.add_argument('--rank', default=1, type=int, help='Rank')
+    parser.add_argument('--n_rows_list', default=range(5, 12),
+                        type=list, help='Number of rows')
+    parser.add_argument('--n_columns_list', default=range(5, 12),
+                        type=list, help='Number of columns')
+    parser.add_argument('--rank_list', default=[1, 2], type=int, help='Rank')
     parser.add_argument('--n_matrices_test', default=32768,
                         type=int, help='Number of matrices to put before printing (each matrix is newly generated)')
 
@@ -77,7 +77,7 @@ def add_computational_args(parser):
     parser.add_argument(
         '--use_data_parallel',
         type=int,
-        default=0,
+        default=1,
         choices=[0, 1],
         help='whether to use data parallel',
     )
@@ -117,9 +117,9 @@ if __name__ == "__main__":
 
     # get data
     logging.info('generating data...')
-    dataset = LowRankDataset(args.n_rows, args.n_columns, args.rank, args.frac_nan_mask,
+    dataset = LowRankDataset(args.n_rows_list, args.n_columns_list, args.rank_list, args.frac_nan_mask,
                              seed=args.seed, length=args.batch_size * 16, randomize=True)
-    dataset_test = LowRankDataset(args.n_rows, args.n_columns, args.rank, args.frac_nan_mask,
+    dataset_test = LowRankDataset(args.n_rows_list, args.n_columns_list, args.rank_list, args.frac_nan_mask,
                                   seed=args.seed + 1, length=args.n_matrices_test, randomize=False)
 
     logging.info('loading model.....')
@@ -142,14 +142,15 @@ if __name__ == "__main__":
         # train and compute train loss
         llm.train()
         train_loss = 0.0
-        for batch_num, (x_nan_t, x_clean_t, nan_mask_t) in enumerate(dataloader):
+        n_masked = 0
+        for batch_num, (x_nan_t, x_clean_t, nan_mask_t, att_mask_t) in enumerate(dataloader):
             x_nan_t = x_nan_t.to(args.device)
             x_clean_t = x_clean_t.to(args.device)
             nan_mask_t = nan_mask_t.to(args.device)
-            att_mask_t = torch.ones_like(x_nan_t).to(args.device)
+            att_mask_t = att_mask_t.to(args.device)
 
             pred = llm(x_nan_t, nan_mask_t, att_mask_t,
-                       n_rows=args.n_rows, n_columns=args.n_columns)
+                       n_rows=max(args.n_rows_list), n_columns=max(args.n_columns_list))
             nan_loss = F.mse_loss(
                 x_clean_t[nan_mask_t.bool()], pred[nan_mask_t.bool()], reduction='mean')
 
@@ -157,9 +158,13 @@ if __name__ == "__main__":
             nan_loss.backward()
             optimizer.step()
 
-            train_loss += nan_loss.item() / nan_mask_t.sum().item() / \
-                torch.abs(x_clean_t[nan_mask_t.bool()]).mean()
+            train_loss += (
+                torch.abs(x_clean_t[nan_mask_t.bool()] -
+                          pred[nan_mask_t.bool()])
+            ).sum().item()  #
+            n_masked += nan_mask_t.sum().item()
 
+        train_loss /= n_masked
         # print(f'{i} -- Train loss {train_loss}')
         train_losses.append(train_loss)
 
@@ -167,16 +172,14 @@ if __name__ == "__main__":
         llm.eval()
         test_loss = 0.0
         n_masked = 0
-        for batch_num, (x_nan_t, x_clean_t, nan_mask_t) in enumerate(dataloader_test):
+        for batch_num, (x_nan_t, x_clean_t, nan_mask_t, att_mask_t) in enumerate(dataloader_test):
             x_nan_t = x_nan_t.to(args.device)
             x_clean_t = x_clean_t.to(args.device)
             nan_mask_t = nan_mask_t.to(args.device)
-            att_mask_t = torch.ones_like(x_nan_t).to(args.device)
-            # print('nan', nan_mask_t.shape, x_clean_t[nan_mask_t.bool()].shape)
+            att_mask_t = att_mask_t.to(args.device)
 
             pred = llm(x_nan_t, nan_mask_t, att_mask_t,
-                       n_rows=args.n_rows, n_columns=args.n_columns)
-            # compute mean absolute fraction err
+                       n_rows=max(args.n_rows_list), n_columns=max(args.n_columns_list))
             test_loss += (
                 torch.abs(x_clean_t[nan_mask_t.bool()] -
                           pred[nan_mask_t.bool()])
@@ -185,7 +188,7 @@ if __name__ == "__main__":
 
         test_loss /= n_masked
         if i == 0:
-            print('Baseline loss', torch.abs(
+            print('~Baseline loss', torch.abs(
                 x_clean_t[nan_mask_t.bool()]).mean().item())
         print(f'{i} -- Test loss {test_loss}')
         test_losses.append(test_loss)
@@ -200,7 +203,6 @@ if __name__ == "__main__":
     os.makedirs(save_dir_unique, exist_ok=True)
     joblib.dump(
         r, join(save_dir_unique, "results.pkl")
-    )  # caching requires that this is called results.pkl
-    # joblib.dump(llm.state_dict, join(save_dir_unique, "model.pkl"))
+    )
     torch.save(llm.state_dict(), join(save_dir_unique, "model.pkl"))
     logging.info("Succesfully completed :)\n\n")
