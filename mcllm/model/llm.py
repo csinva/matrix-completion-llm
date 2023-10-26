@@ -126,9 +126,6 @@ class BertLayer(torch.nn.Module):
 
     def __init__(self, n_heads=1, dropout=0.1, n_embed=3):
         super().__init__()
-
-        # unlike in the original paper, today in transformers it is more common to apply layer norm before other layers
-        # this idea is borrowed from Andrej Karpathy's series on transformers implementation
         self.layer_norm1 = torch.nn.LayerNorm(n_embed)
         self.self_attention = BertSelfAttention(n_heads, dropout, n_embed)
 
@@ -157,20 +154,6 @@ class BertEncoder(torch.nn.Module):
             x = layer(x, mask)
 
         return x
-
-
-class BertPooler(torch.nn.Module):
-    def __init__(self, dropout=0.1, n_embed=3):
-        super().__init__()
-
-        self.dense = torch.nn.Linear(in_features=n_embed, out_features=n_embed)
-        self.activation = torch.nn.GELU()
-
-    def forward(self, x):
-        pooled = self.dense(x)
-        out = self.activation(pooled)
-
-        return out
 
 
 class NanoBERT(torch.nn.Module):
@@ -204,7 +187,7 @@ class NanoBERT(torch.nn.Module):
 
         self.encoder = BertEncoder(n_layers, n_heads, dropout, n_embed)
 
-        self.pooler = BertPooler(dropout, n_embed)
+        self.predictor = torch.nn.Linear(in_features=n_embed, out_features=1)
 
     def forward(self, x):
         # attention masking for padded token
@@ -215,5 +198,5 @@ class NanoBERT(torch.nn.Module):
 
         encoded = self.encoder(embeddings, mask)
 
-        pooled = self.pooler(encoded)
-        return pooled
+        predictions = self.predictor(encoded).squeeze(-1)
+        return predictions
