@@ -69,12 +69,7 @@ class LowRankDataset(data.Dataset):
 
                     # registers attend to each other
                     if r_idx_row >= self.n_max or r_idx_col >= self.n_max:
-                        # print(i, j)
                         att_mask_kernel[i, j] = 1
-
-            # print(att_mask_kernel)
-            # print(att_mask_kernel[0])
-            # exit(0)
 
         else:
             # attention mask for full attention (ignore registers for now)

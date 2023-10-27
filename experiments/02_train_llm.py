@@ -16,12 +16,14 @@ import os.path
 import imodelsx.cache_save_utils
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.utils.data as data
-# python experiments/02_train_llm.py --use_data_parallel 0 --rank 1 --n_matrices=1024
 path_to_repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # decent test script
-# python experiments/02_train_llm.py --n_rows_list 8 --n_columns_list 5 --rank_list 1 --lr 1e-3 --batch_size 1024 --frac_nan_mask 0.1 --n_layers 4 --n_heads 4 --n_embed 12
+# python experiments/02_train_llm.py --n_rows_list 8 --n_columns_list 5 --rank_list 1 --lr 1e-3 --batch_size 1024 --frac_nan_mask 0.1 --n_layers 4 --n_heads 4 --n_embed 12 --n_registers 0 --use_data_parallel 0
+
+# big expt
+# python experiments/02_train_llm.py --n_rows_list 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 --n_columns_list 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 --rank_list 1 2 3 --lr 1e-3 --batch_size 512 --n_layers 6 --n_heads 6 --n_embed 12 --n_registers 1 --use_data_parallel 1 --frac_nan_mask 0.05 0.1 0.15 --use_rowcol_attn 1
 
 
 def add_main_args(parser):
@@ -62,7 +64,6 @@ def add_main_args(parser):
                         type=int, help='Embedding size')
     parser.add_argument('--n_registers', default=1,
                         type=int, help='Number of registers (adds an extra row and column)')
-
     parser.add_argument('--dropout', default=0,
                         type=float, help='Dropout rate')
     parser.add_argument('--use_rowcol_attn', default=1, type=int, choices=[0, 1],
@@ -138,13 +139,13 @@ if __name__ == "__main__":
         'n_registers': args.n_registers,
     }
     dataset = LowRankDataset(
-        seed=args.seed, length=args.batch_size * 16, randomize=True, **kwargs)
+        seed=args.seed, length=args.batch_size * 1, randomize=True, **kwargs)
     dataset_test = LowRankDataset(
         seed=args.seed + 1, length=args.n_matrices_test, randomize=False, **kwargs)
     dataloader = data.DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True)
+        dataset, batch_size=args.batch_size, shuffle=True)  # , num_workers=4)
     dataloader_test = data.DataLoader(
-        dataset_test, batch_size=args.batch_size * 2, shuffle=False)
+        dataset_test, batch_size=args.batch_size * 2, shuffle=False)  # , num_workers=4)
 
     # set up saving dictionary + save params file
     r = defaultdict(list)
@@ -166,7 +167,7 @@ if __name__ == "__main__":
     train_losses = []
     test_losses = []
     best_saved_test_loss = 1e10
-    logging.info('starting training...')
+    logging.info('starting training (loading batch)...')
     for i in tqdm(range(args.num_epochs)):
 
         # train and compute train loss
@@ -179,6 +180,7 @@ if __name__ == "__main__":
             nan_mask_t = nan_mask_t.to(args.device)
             att_mask_t = att_mask_t.to(args.device)
             # with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            logging.info('\tpredicting.....')
             pred = llm(x_nan_t, nan_mask_t, att_mask_t,
                        n_rows=max(args.n_rows_list), n_columns=max(args.n_columns_list))
             nan_loss = F.mse_loss(
@@ -191,7 +193,7 @@ if __name__ == "__main__":
             train_loss += (
                 torch.abs(x_clean_t[nan_mask_t.bool()] -
                           pred[nan_mask_t.bool()])
-            ).sum().item()  #
+            ).sum().item()
             n_masked += nan_mask_t.sum().item()
 
         train_loss /= n_masked

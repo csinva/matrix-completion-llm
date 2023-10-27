@@ -142,11 +142,11 @@ class TabSelfAttention(torch.nn.Module):
         return out
 
 
-class FeedForward(torch.nn.Module):
+class MLP(torch.nn.Module):
     def __init__(self, dropout=0.1, n_embed=3):
         super().__init__()
 
-        self.ffwd = torch.nn.Sequential(
+        self.mlp = torch.nn.Sequential(
             torch.nn.Linear(n_embed, 4 * n_embed),
             torch.nn.GELU(),
             torch.nn.Linear(4 * n_embed, n_embed),
@@ -154,7 +154,7 @@ class FeedForward(torch.nn.Module):
         )
 
     def forward(self, x):
-        out = self.ffwd(x)
+        out = self.mlp(x)
         return out
 
 
@@ -168,14 +168,14 @@ class TabLayer(torch.nn.Module):
         self.self_attention = TabSelfAttention(n_heads, dropout, n_embed)
 
         self.layer_norm2 = torch.nn.LayerNorm(n_embed)
-        self.feed_forward = FeedForward(dropout, n_embed)
+        self.mlp = MLP(dropout, n_embed)
 
     def forward(self, x, att_mask):
         x = self.layer_norm1(x)
         x = x + self.self_attention(x, att_mask)
 
         x = self.layer_norm2(x)
-        out = x + self.feed_forward(x)
+        out = x + self.mlp(x)
 
         return out
 
