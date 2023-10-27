@@ -45,7 +45,7 @@ class LowRankDataset(data.Dataset):
         A = rng.uniform(size=(m, rank)) @ rng.uniform(size=(rank, n))
         return A
 
-    def _create_attn_mask(self, m, n):
+    def _create_att_mask(self, m, n):
         '''Create attention mask of size (seq_len, seq_len)
         Note: registers are stored at the right / bottom of the sequence
             Each row/col can attend to its own registers, and registers can attend to each other
@@ -103,7 +103,7 @@ class LowRankDataset(data.Dataset):
         x_full = np.zeros((self.m_max + self.n_registers,
                           self.n_max + self.n_registers))
         x_full[:m, :n] = x
-        att_mask_t = self._create_attn_mask(m, n)
+        att_mask_t = self._create_att_mask(m, n)
 
         # nan mask - randomly mask some frac
         # only mask values in first m rows and first n cols

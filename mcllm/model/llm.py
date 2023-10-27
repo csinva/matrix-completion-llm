@@ -1,9 +1,14 @@
+from lightning.pytorch.utilities.types import OptimizerLRScheduler
 import transformers
 import torch
 import math
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
+import lightning as L
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+import logging
+import lightning.pytorch as pl
 
 
 class TabEmbeddings(torch.nn.Module):
@@ -180,11 +185,19 @@ class TabLayer(torch.nn.Module):
         return out
 
 
-class TabLLM(torch.nn.Module):
+class TabLLM(L.LightningModule):
     """BERT-style encoder
     """
 
-    def __init__(self, n_layers=2, n_heads=3, dropout=0.1, n_embed=10, use_pos_embeddings=True):
+    def __init__(self,
+                 n_layers=2, n_heads=3, dropout=0.1, n_embed=10, use_pos_embeddings=True,
+
+                 # training args
+                 learning_rate=1e-3,
+                 n_rows_list=[],
+                 n_columns_list=[]
+
+                 ):
         """
         Params
         ------
@@ -207,6 +220,11 @@ class TabLLM(torch.nn.Module):
             [TabLayer(n_heads, dropout, n_embed) for _ in range(n_layers)])
 
         self.unembedding = torch.nn.Linear(in_features=n_embed, out_features=1)
+
+        # training args
+        self.learning_rate = learning_rate
+        self.n_rows_list = n_rows_list
+        self.n_columns_list = n_columns_list
 
     def forward(self, x: torch.Tensor, nan_mask: torch.Tensor, att_mask: torch.Tensor,
                 n_rows: int, n_columns: int):
@@ -238,3 +256,33 @@ class TabLLM(torch.nn.Module):
         # project embedding size to scalar matrix
         mat = self.unembedding(x).squeeze(-1)
         return mat
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        scheduler = ReduceLROnPlateau(optimizer, 'min')
+        return {'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'monitor': 'loss'}}
+
+    def training_step(self, batch, batch_idx):
+        (x_nan_t, x_clean_t, nan_mask_t, att_mask_t) = batch
+        pred = self.forward(x_nan_t, nan_mask_t, att_mask_t,
+                            n_rows=max(self.n_rows_list), n_columns=max(self.n_columns_list))
+        train_loss = F.mse_loss(
+            x_clean_t[nan_mask_t.bool()], pred[nan_mask_t.bool()], reduction='mean')
+        self.log('loss', train_loss, prog_bar=True,
+                 on_epoch=True, on_step=False, sync_dist=True)
+        return {'loss': train_loss}
+
+    def validation_step(self, batch, batch_idx):
+        (x_nan_t, x_clean_t, nan_mask_t, att_mask_t) = batch
+        pred = self.forward(x_nan_t, nan_mask_t, att_mask_t,
+                            n_rows=max(self.n_rows_list), n_columns=max(self.n_columns_list))
+        val_loss = (
+            torch.abs(x_clean_t[nan_mask_t.bool()] -
+                      pred[nan_mask_t.bool()])
+        ).sum().item() / nan_mask_t.sum().item()
+        self.log('val_loss', val_loss, prog_bar=True,
+                 on_epoch=True, on_step=False, sync_dist=True)
+        return {'val_loss': val_loss}
+
+    def on_validation_epoch_end(self):
+        print('')
