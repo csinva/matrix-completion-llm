@@ -56,10 +56,11 @@ class LowRankDataset(data.Dataset):
         m_max_with_reg = self.m_max + self.n_registers
         if self.use_rowcol_attn:
             att_mask_kernel = np.zeros((seq_len, seq_len))
-            for i in range(seq_len):
+            seq_len_before_reg = self.m_max * self.n_max
+            for i in range(seq_len_before_reg):
                 r_idx_row = i // m_max_with_reg
                 c_idx_row = i % m_max_with_reg
-                for j in range(seq_len):
+                for j in range(seq_len_before_reg):
                     r_idx_col = j // m_max_with_reg
                     c_idx_col = j % m_max_with_reg
 
@@ -67,9 +68,9 @@ class LowRankDataset(data.Dataset):
                     if r_idx_row == r_idx_col or c_idx_row == c_idx_col:
                         att_mask_kernel[i, j] = 1
 
-                    # registers attend to each other
-                    if r_idx_row >= self.n_max or r_idx_col >= self.n_max:
-                        att_mask_kernel[i, j] = 1
+            # everything attends to registers (also registers attend to each other)
+            att_mask_kernel[seq_len_before_reg:] = 1
+            att_mask_kernel[:, seq_len_before_reg:] = 1
 
         else:
             # attention mask for full attention (ignore registers for now)
@@ -105,18 +106,24 @@ class LowRankDataset(data.Dataset):
         x_full[:m, :n] = x
         att_mask_t = self._create_att_mask(m, n)
 
-        # nan mask - randomly mask some frac
+        # nan mask - randomly mask some frac (1 means nan)
         # only mask values in first m rows and first n cols
-        nan_mask = np.zeros_like(x_full)
+        nan_mask = np.zeros(x_full.shape)
         nan_mask[:m, :n] = self.rng.binomial(1, frac_nan_mask, size=(m, n))
         nan_mask_t = torch.Tensor(nan_mask).flatten()
 
-        x_full = x_full.flatten()
-        x_clean_t = torch.Tensor(x_full)
+        # register mask
+        register_mask_t = torch.zeros(x_full.shape)
+        if self.n_registers > 0:
+            register_mask_t[-self.n_registers:] = 1
+            register_mask_t[:, -self.n_registers:] = 1
+        register_mask_t = register_mask_t.flatten()
+
+        x_clean_t = torch.Tensor(x_full.flatten())
         x_nan_t = x_clean_t.clone()
         x_nan_t[nan_mask_t.bool()] = 0
 
-        return x_nan_t, x_clean_t, nan_mask_t, att_mask_t
+        return x_nan_t, x_clean_t, nan_mask_t, att_mask_t, register_mask_t
 
 
 if __name__ == '__main__':

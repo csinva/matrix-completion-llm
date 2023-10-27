@@ -18,18 +18,20 @@ class TabEmbeddings(torch.nn.Module):
         1 emb dim will represent nan_mask
         If use_pos_embeddings is True,
             2 emb dims will represent positional embeddings (row/col indexes)
+        else:
+            1 emb dim will represent register_mask
         '''
         super().__init__()
         self.use_pos_embeddings = use_pos_embeddings
         if use_pos_embeddings:
             self.val_embeddings = torch.nn.Linear(1, n_embed - 3)
         else:
-            self.val_embeddings = torch.nn.Linear(1, n_embed - 1)
+            self.val_embeddings = torch.nn.Linear(1, n_embed - 2)
         self.layer_norm = torch.nn.LayerNorm(
             n_embed, eps=1e-12, elementwise_affine=True)
         self.dropout = torch.nn.Dropout(p=0.1, inplace=False)
 
-    def forward(self, x: torch.Tensor, nan_mask: torch.Tensor, n_rows, n_columns):
+    def forward(self, x: torch.Tensor, nan_mask: torch.Tensor, register_mask: torch.Tensor, n_rows, n_columns):
         '''
         Params
         ------
@@ -62,6 +64,11 @@ class TabEmbeddings(torch.nn.Module):
                 [embeddings, col_tensor.unsqueeze(-1)], dim=-1)
             embeddings = torch.cat(
                 [embeddings, row_tensor.unsqueeze(-1)], dim=-1)
+
+        # register mask
+        else:
+            embeddings = torch.cat(
+                [embeddings, register_mask.unsqueeze(-1)], dim=-1)
 
         # normalize
         embeddings = self.layer_norm(embeddings)
@@ -189,15 +196,16 @@ class TabLLM(L.LightningModule):
     """BERT-style encoder
     """
 
-    def __init__(self,
-                 n_layers=2, n_heads=3, dropout=0.1, n_embed=10, use_pos_embeddings=True,
+    def __init__(
+            self,
+            n_layers=2, n_heads=3, dropout=0.1, n_embed=10, use_pos_embeddings=True,
 
-                 # training args
-                 learning_rate=1e-3,
-                 n_rows_list=[],
-                 n_columns_list=[]
+            # training args
+            learning_rate=1e-3,
+            n_rows_list=[],
+            n_columns_list=[]
 
-                 ):
+    ):
         """
         Params
         ------
@@ -226,7 +234,7 @@ class TabLLM(L.LightningModule):
         self.n_rows_list = n_rows_list
         self.n_columns_list = n_columns_list
 
-    def forward(self, x: torch.Tensor, nan_mask: torch.Tensor, att_mask: torch.Tensor,
+    def forward(self, x: torch.Tensor, nan_mask: torch.Tensor, att_mask: torch.Tensor, register_mask: torch.Tensor,
                 n_rows: int, n_columns: int):
         '''
         Params
@@ -238,8 +246,11 @@ class TabLLM(L.LightningModule):
             nan_mask is the same shape as x,
             but with 1s where x is nan and 0s elsewhere
         att_mask: torch.Tensor
-            attention mask is the same shape as x,
-            but with 1s where x should be attended and 0 elsewhere
+            attention mask is (seq_len, seq_len)
+            with 1s where x should be attended and 0 elsewhere
+        register_mask: torch.Tensor
+            register_mask is the same shape as x,
+            but with -1s where x is a register and 0s elsewhere
         n_rows: int
             number of rows in the input matrix
         n_columns: int
@@ -247,7 +258,7 @@ class TabLLM(L.LightningModule):
         '''
 
         # embeddings become (batch_size, seq_len, n_embed)
-        x = self.embedding(x, nan_mask, n_rows, n_columns)
+        x = self.embedding(x, nan_mask, register_mask, n_rows, n_columns)
 
         # apply each encoding layer
         for layer in self.tab_layers:
@@ -263,8 +274,8 @@ class TabLLM(L.LightningModule):
         return {'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'monitor': 'loss'}}
 
     def training_step(self, batch, batch_idx):
-        (x_nan_t, x_clean_t, nan_mask_t, att_mask_t) = batch
-        pred = self.forward(x_nan_t, nan_mask_t, att_mask_t,
+        (x_nan_t, x_clean_t, nan_mask_t, att_mask_t, register_mask_t) = batch
+        pred = self.forward(x_nan_t, nan_mask_t, att_mask_t, register_mask_t,
                             n_rows=max(self.n_rows_list), n_columns=max(self.n_columns_list))
         train_loss = F.mse_loss(
             x_clean_t[nan_mask_t.bool()], pred[nan_mask_t.bool()], reduction='mean')
@@ -273,8 +284,8 @@ class TabLLM(L.LightningModule):
         return {'loss': train_loss}
 
     def validation_step(self, batch, batch_idx):
-        (x_nan_t, x_clean_t, nan_mask_t, att_mask_t) = batch
-        pred = self.forward(x_nan_t, nan_mask_t, att_mask_t,
+        (x_nan_t, x_clean_t, nan_mask_t, att_mask_t, register_mask_t) = batch
+        pred = self.forward(x_nan_t, nan_mask_t, att_mask_t, register_mask_t,
                             n_rows=max(self.n_rows_list), n_columns=max(self.n_columns_list))
         val_loss = (
             torch.abs(x_clean_t[nan_mask_t.bool()] -
