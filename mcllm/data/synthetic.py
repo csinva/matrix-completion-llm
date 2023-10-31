@@ -24,6 +24,14 @@ class LowRankDataset(data.Dataset):
         length=100, seed=13, randomize=False,
         n_registers=1,
     ):
+        if isinstance(m_list, int):
+            m_list = [m_list]
+        if isinstance(n_list, int):
+            n_list = [n_list]
+        if isinstance(rank_list, int):
+            rank_list = [rank_list]
+        if isinstance(frac_nan_mask_list, float):
+            frac_nan_mask_list = [frac_nan_mask_list]
         self.m_list = m_list
         self.n_list = n_list
         self.m_max = max(m_list)
@@ -35,6 +43,14 @@ class LowRankDataset(data.Dataset):
         self.randomize = randomize
         self.use_rowcol_attn = use_rowcol_attn
         self.n_registers = n_registers
+
+        # set register mask
+        register_mask = torch.zeros((self.m_max + self.n_registers,
+                                     self.n_max + self.n_registers))
+        if self.n_registers > 0:
+            register_mask[-self.n_registers:] = 1
+            register_mask[:, -self.n_registers:] = 1
+        self.register_mask = register_mask.flatten()
 
     def __len__(self):
         return self.length
@@ -75,7 +91,7 @@ class LowRankDataset(data.Dataset):
                         att_mask_kernel[i, j] = 1
         else:
             # attention mask for full attention
-            att_mask_kernel[:m, :n] = 1
+            att_mask_kernel[:m*n, :m*n] = 1
         return att_mask_kernel
 
     def __getitem__(self, idx):
@@ -107,18 +123,11 @@ class LowRankDataset(data.Dataset):
         nan_mask[:m, :n] = self.rng.binomial(1, frac_nan_mask, size=(m, n))
         nan_mask_t = torch.Tensor(nan_mask).flatten()
 
-        # register mask
-        register_mask_t = torch.zeros(x_full.shape)
-        if self.n_registers > 0:
-            register_mask_t[-self.n_registers:] = 1
-            register_mask_t[:, -self.n_registers:] = 1
-        register_mask_t = register_mask_t.flatten()
-
         x_clean_t = torch.Tensor(x_full.flatten())
         x_nan_t = x_clean_t.clone()
         x_nan_t[nan_mask_t.bool()] = 0
 
-        return x_nan_t, x_clean_t, nan_mask_t, att_mask_t, register_mask_t
+        return x_nan_t, x_clean_t, nan_mask_t, att_mask_t, self.register_mask
 
 
 if __name__ == '__main__':

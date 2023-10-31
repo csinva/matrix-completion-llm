@@ -240,8 +240,12 @@ class TabLLM(L.LightningModule):
         self.n_rows_list = n_rows_list
         self.n_columns_list = n_columns_list
 
-    def forward(self, x: torch.Tensor, nan_mask: torch.Tensor, att_mask: torch.Tensor, register_mask: torch.Tensor,
-                n_rows: int, n_columns: int):
+    def forward(
+        self,
+        x: torch.Tensor, nan_mask: torch.Tensor,
+        att_mask: torch.Tensor, register_mask: torch.Tensor,
+        n_rows: int, n_columns: int
+    ):
         '''
         Params
         ------
