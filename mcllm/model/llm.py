@@ -12,21 +12,26 @@ import lightning.pytorch as pl
 
 
 class TabEmbeddings(torch.nn.Module):
-    def __init__(self, n_embed, use_pos_embeddings=True):
+    def __init__(self, n_embed, use_pos_embeddings=True, n_registers: int = 0):
         '''
         Original values will be linearly projected to multiple dimensions
         1 emb dim will represent nan_mask
         If use_pos_embeddings is True,
             2 emb dims will represent positional embeddings (row/col indexes)
-        else:
+        If use_registers is True,
             1 emb dim will represent register_mask
         '''
         super().__init__()
         self.use_pos_embeddings = use_pos_embeddings
+        self.n_registers = n_registers
+        n_reserved_emb_dims = 1  # nan_mask
         if use_pos_embeddings:
-            self.val_embeddings = torch.nn.Linear(1, n_embed - 3)
-        else:
-            self.val_embeddings = torch.nn.Linear(1, n_embed - 2)
+            n_reserved_emb_dims += 2  # row/col indexes
+        if n_registers > 0:
+            n_reserved_emb_dims += 1  # register_mask
+
+        # actual layers
+        self.val_embeddings = torch.nn.Linear(1, n_embed - n_reserved_emb_dims)
         self.layer_norm = torch.nn.LayerNorm(
             n_embed, eps=1e-12, elementwise_affine=True)
         self.dropout = torch.nn.Dropout(p=0.1, inplace=False)
@@ -47,26 +52,33 @@ class TabEmbeddings(torch.nn.Module):
 
         # append positional embeddings (batch_size, seq_len)
         if self.use_pos_embeddings:
+            def norm(x): return (x - x.mean()) / x.std()
+
+            # account for registers
+            nc = n_columns + self.n_registers
+            nr = n_rows + self.n_registers
+
             # one embedding dimension represents the column number, another dimension represents the row
             col_tensor = torch.tile(torch.Tensor(
-                np.arange(n_columns)), (n_rows, 1))
-            col_tensor = ((col_tensor - col_tensor.mean()) /
-                          col_tensor.std())
-            self.col_tensor = col_tensor.flatten()  # (seq_len)
+                np.arange(nc)), (nr, 1))
             row_tensor = torch.tile(torch.Tensor(
-                np.arange(n_rows)), (n_columns, 1)).T
-            row_tensor = ((row_tensor - row_tensor.mean()) /
-                          row_tensor.std())
-            self.row_tensor = row_tensor.flatten()  # (seq_len)
-            col_tensor = self.col_tensor.repeat(x.shape[0], 1).to(x.device)
-            row_tensor = self.row_tensor.repeat(x.shape[0], 1).to(x.device)
+                np.arange(nr)), (nc, 1)).T
+
+            # normalize
+            col_tensor = norm(col_tensor)
+            row_tensor = norm(row_tensor)
+
+            col_tensor = col_tensor.flatten()  # (seq_len)
+            row_tensor = row_tensor.flatten()  # (seq_len)
+            col_tensor = col_tensor.repeat(x.shape[0], 1).to(x.device)
+            row_tensor = row_tensor.repeat(x.shape[0], 1).to(x.device)
             embeddings = torch.cat(
                 [embeddings, col_tensor.unsqueeze(-1)], dim=-1)
             embeddings = torch.cat(
                 [embeddings, row_tensor.unsqueeze(-1)], dim=-1)
 
         # register mask
-        else:
+        if self.n_registers > 0:
             embeddings = torch.cat(
                 [embeddings, register_mask.unsqueeze(-1)], dim=-1)
 
@@ -76,20 +88,6 @@ class TabEmbeddings(torch.nn.Module):
 
         return embeddings
 
-
-# class TabSelfAttention(torch.nn.Module):
-#     def __init__(self, n_heads=1, dropout=0.1, n_embed=3):
-#         super().__init__()
-#         self.mha = torch.nn.MultiheadAttention(
-#             embed_dim=n_embed, num_heads=n_heads, dropout=dropout, batch_first=True)
-#         self.proj = torch.nn.Linear(n_embed, n_embed)
-#         self.dropout = torch.nn.Dropout(dropout)
-
-#     def forward(self, x, att_mask):
-#         context, _ = self.mha(x, x, x, key_padding_mask=att_mask)
-#         proj = self.proj(context)
-#         out = self.dropout(proj)
-#         return out
 
 class TabAttentionHead(torch.nn.Module):
     def __init__(self, head_size, dropout=0.1, n_embed=3):
@@ -198,7 +196,12 @@ class TabLLM(L.LightningModule):
 
     def __init__(
             self,
-            n_layers=2, n_heads=3, dropout=0.1, n_embed=10, use_pos_embeddings=True,
+            n_layers=2,
+            n_heads=3,
+            dropout=0.1,
+            n_embed=10,
+            use_pos_embeddings=True,
+            n_registers=0,
 
             # training args
             learning_rate=1e-3,
@@ -213,6 +216,8 @@ class TabLLM(L.LightningModule):
             number of BERT layer in the model (default=2)
         n_heads: int    
             number of heads in the MultiHeaded Self Attention Mechanism (default=1)
+        n_registers: int
+            whether to use register embeddings (default=False)
         dropout: float
             hidden dropout of the BERT model (default=0.1)
         n_embed: int
@@ -222,7 +227,8 @@ class TabLLM(L.LightningModule):
         """
         super().__init__()
 
-        self.embedding = TabEmbeddings(n_embed, use_pos_embeddings)
+        self.embedding = TabEmbeddings(
+            n_embed, use_pos_embeddings, n_registers=n_registers)
 
         self.tab_layers = torch.nn.ModuleList(
             [TabLayer(n_heads, dropout, n_embed) for _ in range(n_layers)])
@@ -256,9 +262,12 @@ class TabLLM(L.LightningModule):
         n_columns: int
             number of columns in the input matrix
         '''
+        # print('shapes', x.shape, nan_mask.shape, att_mask.shape,
+        #   register_mask.shape, n_rows, n_columns)
 
         # embeddings become (batch_size, seq_len, n_embed)
-        x = self.embedding(x, nan_mask, register_mask, n_rows, n_columns)
+        x = self.embedding(x, nan_mask, register_mask,
+                           n_rows, n_columns)
 
         # apply each encoding layer
         for layer in self.tab_layers:

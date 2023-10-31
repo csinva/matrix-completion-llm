@@ -54,9 +54,15 @@ class LowRankDataset(data.Dataset):
         seq_len = (self.m_max + self.n_registers) * \
             (self.n_max + self.n_registers)
         m_max_with_reg = self.m_max + self.n_registers
+
+        # basic attn_mask
+        att_mask_kernel = torch.zeros((seq_len, seq_len))
+        seq_len_before_reg = self.m_max * self.n_max
+        # everything attends to registers (also registers attend to each other)
+        att_mask_kernel[seq_len_before_reg:] = 1
+        att_mask_kernel[:, seq_len_before_reg:] = 1
+
         if self.use_rowcol_attn:
-            att_mask_kernel = np.zeros((seq_len, seq_len))
-            seq_len_before_reg = self.m_max * self.n_max
             for i in range(seq_len_before_reg):
                 r_idx_row = i // m_max_with_reg
                 c_idx_row = i % m_max_with_reg
@@ -67,21 +73,10 @@ class LowRankDataset(data.Dataset):
                     # everything attends to points in the same row/col
                     if r_idx_row == r_idx_col or c_idx_row == c_idx_col:
                         att_mask_kernel[i, j] = 1
-
-            # everything attends to registers (also registers attend to each other)
-            att_mask_kernel[seq_len_before_reg:] = 1
-            att_mask_kernel[:, seq_len_before_reg:] = 1
-
         else:
-            # attention mask for full attention (ignore registers for now)
-            att_mask = np.zeros((self.m_max, self.n_max))
-            att_mask[:m, :n] = 1
-            att_mask = att_mask.flatten()
-            # pytorch mha implementation only uses att_mask (size is just seq_len)
-            att_mask_kernel = np.ones((seq_len, seq_len))
-            att_mask_kernel[~att_mask.astype(bool)] = 0
-            att_mask_kernel[:, ~att_mask.astype(bool)] = 0
-        return torch.Tensor(att_mask_kernel)
+            # attention mask for full attention
+            att_mask_kernel[:m, :n] = 1
+        return att_mask_kernel
 
     def __getitem__(self, idx):
         if self.randomize:
