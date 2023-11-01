@@ -197,9 +197,9 @@ class TabLLM(L.LightningModule):
     def __init__(
             self,
             n_layers=2,
-            n_heads=3,
+            n_heads=6,
             dropout=0.1,
-            n_embed=10,
+            n_embed=12,
             use_pos_embeddings=True,
             n_registers=0,
 
@@ -226,6 +226,7 @@ class TabLLM(L.LightningModule):
             whether to use positional embeddings (default=True)
         """
         super().__init__()
+        self.save_hyperparameters()
 
         self.embedding = TabEmbeddings(
             n_embed, use_pos_embeddings, n_registers=n_registers)

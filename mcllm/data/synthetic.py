@@ -4,6 +4,53 @@ import numpy as np
 import torch
 
 
+def get_register_mask(m_max, n_max, n_registers):
+    '''Returns flattened mask that is 0 everywhere except for the registers.
+    Note: registers are stored at the right / bottom of the sequence
+    '''
+    register_mask = torch.zeros((m_max + n_registers,
+                                 n_max + n_registers))
+    if n_registers > 0:
+        register_mask[-n_registers:] = 1
+        register_mask[:, -n_registers:] = 1
+    return register_mask.flatten()
+
+
+def get_att_mask(m_max, n_max, n_registers, m, n, use_rowcol_attn: bool):
+    '''Create attention mask of size (seq_len, seq_len)
+    Attention is set to 0 except for registers and points in the same row/col (up to m, n)
+    Note: registers are stored at the right / bottom of the sequence
+        Each row/col can attend to its own registers, and registers can attend to each other
+        in addition to their own row/col
+    '''
+    seq_len = (m_max + n_registers) * \
+        (n_max + n_registers)
+    m_max_with_reg = m_max + n_registers
+
+    # basic attn_mask
+    att_mask_kernel = torch.zeros((seq_len, seq_len))
+    seq_len_before_reg = m_max * n_max
+    # everything attends to registers (also registers attend to each other)
+    att_mask_kernel[seq_len_before_reg:] = 1
+    att_mask_kernel[:, seq_len_before_reg:] = 1
+
+    if use_rowcol_attn:
+        for i in range(seq_len_before_reg):
+            r_idx_row = i // m_max_with_reg
+            c_idx_row = i % m_max_with_reg
+            for j in range(seq_len_before_reg):
+                r_idx_col = j // m_max_with_reg
+                c_idx_col = j % m_max_with_reg
+
+                # everything attends to points in the same row/col
+                if r_idx_row == r_idx_col or c_idx_row == c_idx_col:
+                    att_mask_kernel[i, j] = 1
+    else:
+        # attention mask for full attention
+        att_mask_kernel[:m*n, :m*n] = 1
+    return att_mask_kernel
+
+
 class LowRankDataset(data.Dataset):
     '''
     Dataset that returns low-rank matrices
@@ -43,56 +90,17 @@ class LowRankDataset(data.Dataset):
         self.randomize = randomize
         self.use_rowcol_attn = use_rowcol_attn
         self.n_registers = n_registers
-
-        # set register mask
-        register_mask = torch.zeros((self.m_max + self.n_registers,
-                                     self.n_max + self.n_registers))
-        if self.n_registers > 0:
-            register_mask[-self.n_registers:] = 1
-            register_mask[:, -self.n_registers:] = 1
-        self.register_mask = register_mask.flatten()
+        self.register_mask = get_register_mask(
+            self.m_max, self.n_max, n_registers)
 
     def __len__(self):
         return self.length
 
-    def create_low_rank_matrix(self, m, n, rank):
+    def get_low_rank_matrix(self, m, n, rank):
         rng = self.rng
         # A = rng.normal(size=(m, rank)) @ rng.normal(size=(rank, n))
         A = rng.uniform(size=(m, rank)) @ rng.uniform(size=(rank, n))
         return A
-
-    def _create_att_mask(self, m, n):
-        '''Create attention mask of size (seq_len, seq_len)
-        Note: registers are stored at the right / bottom of the sequence
-            Each row/col can attend to its own registers, and registers can attend to each other
-            in addition to their own row/col
-        '''
-        seq_len = (self.m_max + self.n_registers) * \
-            (self.n_max + self.n_registers)
-        m_max_with_reg = self.m_max + self.n_registers
-
-        # basic attn_mask
-        att_mask_kernel = torch.zeros((seq_len, seq_len))
-        seq_len_before_reg = self.m_max * self.n_max
-        # everything attends to registers (also registers attend to each other)
-        att_mask_kernel[seq_len_before_reg:] = 1
-        att_mask_kernel[:, seq_len_before_reg:] = 1
-
-        if self.use_rowcol_attn:
-            for i in range(seq_len_before_reg):
-                r_idx_row = i // m_max_with_reg
-                c_idx_row = i % m_max_with_reg
-                for j in range(seq_len_before_reg):
-                    r_idx_col = j // m_max_with_reg
-                    c_idx_col = j % m_max_with_reg
-
-                    # everything attends to points in the same row/col
-                    if r_idx_row == r_idx_col or c_idx_row == c_idx_col:
-                        att_mask_kernel[i, j] = 1
-        else:
-            # attention mask for full attention
-            att_mask_kernel[:m*n, :m*n] = 1
-        return att_mask_kernel
 
     def __getitem__(self, idx):
         if self.randomize:
@@ -108,26 +116,30 @@ class LowRankDataset(data.Dataset):
         frac_nan_mask = self.rng.choice(self.frac_nan_mask_list)
 
         # create matrix
-        x = self.create_low_rank_matrix(m, n, rank)
+        x = self.get_low_rank_matrix(m, n, rank)
         x = (x - x.mean(axis=1).reshape(-1, 1)) / x.std(axis=1).reshape(-1, 1)
 
         # put matrix into full matrix
-        x_full = np.zeros((self.m_max + self.n_registers,
-                          self.n_max + self.n_registers))
-        x_full[:m, :n] = x
-        att_mask_t = self._create_att_mask(m, n)
+        x_clean = np.zeros((self.m_max + self.n_registers,
+                            self.n_max + self.n_registers))
+        x_clean[:m, :n] = x
+        x_clean = torch.Tensor(x_clean.flatten())
 
+        # get masks and x_nan
         # nan mask - randomly mask some frac (1 means nan)
         # only mask values in first m rows and first n cols
-        nan_mask = np.zeros(x_full.shape)
+        nan_mask = np.zeros((self.m_max + self.n_registers,
+                            self.n_max + self.n_registers))
         nan_mask[:m, :n] = self.rng.binomial(1, frac_nan_mask, size=(m, n))
-        nan_mask_t = torch.Tensor(nan_mask).flatten()
+        nan_mask = torch.Tensor(nan_mask).flatten()
 
-        x_clean_t = torch.Tensor(x_full.flatten())
-        x_nan_t = x_clean_t.clone()
-        x_nan_t[nan_mask_t.bool()] = 0
+        x_nan = x_clean.clone()
+        x_nan[nan_mask.bool()] = 0
 
-        return x_nan_t, x_clean_t, nan_mask_t, att_mask_t, self.register_mask
+        att_mask = get_att_mask(
+            self.m_max, self.n_max, self.n_registers, m, n, self.use_rowcol_attn)
+
+        return x_nan, x_clean, nan_mask, att_mask, self.register_mask
 
 
 if __name__ == '__main__':
