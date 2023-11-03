@@ -29,22 +29,26 @@ def get_att_mask(m_max, n_max, n_registers, m, n, use_rowcol_attn: bool):
 
     # basic attn_mask
     att_mask_kernel = torch.zeros((seq_len, seq_len))
-    seq_len_before_reg = m_max * n_max
+    # seq_len_before_reg = (m_max + n_registers) * n_max
     # everything attends to registers (also registers attend to each other)
-    att_mask_kernel[seq_len_before_reg:] = 1
-    att_mask_kernel[:, seq_len_before_reg:] = 1
+    # att_mask_kernel[seq_len_before_reg:] = 1
+    # att_mask_kernel[:, seq_len_before_reg:] = 1
 
     if use_rowcol_attn:
-        for i in range(seq_len_before_reg):
+        for i in range(seq_len):
             r_idx_row = i // m_max_with_reg
             c_idx_row = i % m_max_with_reg
-            for j in range(seq_len_before_reg):
+            for j in range(seq_len):
                 r_idx_col = j // m_max_with_reg
                 c_idx_col = j % m_max_with_reg
 
                 # everything attends to points in the same row/col
                 if r_idx_row == r_idx_col or c_idx_row == c_idx_col:
                     att_mask_kernel[i, j] = 1
+
+                # register attention
+                # if c_idx_col >= n_max:
+                    # att_mask_kernel[i, j] = 1
     else:
         # attention mask for full attention
         att_mask_kernel[:m*n, :m*n] = 1
