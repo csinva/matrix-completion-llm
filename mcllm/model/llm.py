@@ -5,7 +5,6 @@ import math
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
-import lightning as L
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import logging
 import lightning.pytorch as pl
@@ -79,6 +78,7 @@ class TabEmbeddings(torch.nn.Module):
 
         # register mask
         if self.n_registers > 0:
+            print('shapes', embeddings.shape, register_mask.shape)
             embeddings = torch.cat(
                 [embeddings, register_mask.unsqueeze(-1)], dim=-1)
 
@@ -190,7 +190,7 @@ class TabLayer(torch.nn.Module):
         return out
 
 
-class TabLLM(L.LightningModule):
+class TabLLM(pl.LightningModule):
     """BERT-style encoder
     """
 
