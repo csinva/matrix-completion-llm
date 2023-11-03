@@ -78,7 +78,6 @@ class TabEmbeddings(torch.nn.Module):
 
         # register mask
         if self.n_registers > 0:
-            print('shapes', embeddings.shape, register_mask.shape)
             embeddings = torch.cat(
                 [embeddings, register_mask.unsqueeze(-1)], dim=-1)
 
