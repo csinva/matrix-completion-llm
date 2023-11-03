@@ -13,12 +13,13 @@ import lightning.pytorch as pl
 class TabEmbeddings(torch.nn.Module):
     def __init__(self, n_embed, use_pos_embeddings=True, n_registers: int = 0):
         '''
-        Original values will be linearly projected to multiple dimensions
-        1 emb dim will represent nan_mask
-        If use_pos_embeddings is True,
-            2 emb dims will represent positional embeddings (row/col indexes)
-        If use_registers is True,
-            1 emb dim will represent register_mask
+        Original values will be linearly projected to multiple dimensions.
+        Special dimensions:
+            - 1 emb dim will represent nan_mask
+            - If use_pos_embeddings is True, 
+                2 emb dims will represent positional embeddings (row/col indexes)
+            - If use_registers is True,
+                1 emb dim will represent register_mask
         '''
         super().__init__()
         self.use_pos_embeddings = use_pos_embeddings
@@ -35,13 +36,15 @@ class TabEmbeddings(torch.nn.Module):
             n_embed, eps=1e-12, elementwise_affine=True)
         self.dropout = torch.nn.Dropout(p=0.1, inplace=False)
 
-    def forward(self, x: torch.Tensor, nan_mask: torch.Tensor, register_mask: torch.Tensor, n_rows, n_columns):
+    def forward(
+            self, x: torch.Tensor, nan_mask: torch.Tensor, register_mask: torch.Tensor,
+            n_rows: int, n_columns: int
+    ):
         '''
         Params
         ------
         x: torch.Tensor
-            input tensor of shape (batch_size, seq_len)
-            seq_len is the flattened matrix
+            input tensor of shape (batch_size, seq_len), where seq_len is the flattened matrix
         '''
         # val_embeddings are (batch_size, seq_len, n_embed)
         embeddings = self.val_embeddings(x.unsqueeze(-1))
@@ -58,15 +61,14 @@ class TabEmbeddings(torch.nn.Module):
             nr = n_rows + self.n_registers
 
             # one embedding dimension represents the column number, another dimension represents the row
-            col_tensor = torch.tile(torch.Tensor(
-                np.arange(nc)), (nr, 1))
-            row_tensor = torch.tile(torch.Tensor(
-                np.arange(nr)), (nc, 1)).T
+            col_tensor = torch.tile(torch.Tensor(np.arange(nc)), (nr, 1))
+            row_tensor = torch.tile(torch.Tensor(np.arange(nr)), (nc, 1)).T
 
             # normalize
             col_tensor = norm(col_tensor)
             row_tensor = norm(row_tensor)
 
+            # flatten and repeat for batch
             col_tensor = col_tensor.flatten()  # (seq_len)
             row_tensor = row_tensor.flatten()  # (seq_len)
             col_tensor = col_tensor.repeat(x.shape[0], 1).to(x.device)
@@ -107,7 +109,7 @@ class TabAttentionHead(torch.nn.Module):
         x: torch.Tensor
             input tensor of shape (batch_size, seq_len, n_embed)
         '''
-        batch_size, seq_len, n_embed = x.shape
+        _, _, n_embed = x.shape
 
         # these are all (batch_size, seq_len, head_size)
         q = self.query(x)

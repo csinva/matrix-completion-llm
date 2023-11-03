@@ -3,13 +3,9 @@ from os.path import dirname, join
 import os.path
 repo_dir = dirname(dirname(os.path.abspath(__file__)))
 
-# Showcasing different ways to sweep over arguments
-# Can pass any empty dict for any of these to avoid sweeping
-# python experiments/01_train_and_test.py --use_cache 0
-
 # List of values to sweep over (sweeps over all combinations of these)
 params_shared_dict = {
-    'seed': [1, 2],
+    'seed': [1],
     'save_dir': [join(repo_dir, 'results')],
     # pass binary values with 0/1 instead of the ambiguous strings True/False
     'use_cache': [1],
@@ -30,4 +26,5 @@ submit_utils.run_args_list(
     args_list,
     script_name=join(repo_dir, 'experiments', '01_train_and_test.py'),
     actually_run=True,
+    # gpu_ids=[0],
 )
