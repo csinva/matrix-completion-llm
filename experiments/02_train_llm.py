@@ -31,22 +31,26 @@ def add_main_args(parser):
     """
 
     # data args
-    parser.add_argument('--n_rows_list', default=range(8, 9),  # (5, 20)
+    parser.add_argument('--n_rows_list', default=list(range(5, 21)),  # (5, 20)
                         type=int, nargs='+', help='Number of rows')
-    parser.add_argument('--n_columns_list', default=range(5, 6),  # (5, 20)
+    parser.add_argument('--n_columns_list', default=list(range(5, 32)),  # (5, 20)
                         type=int, nargs='+', help='Number of columns')
-    parser.add_argument('--rank_list', default=range(1, 2),  # (1, 5)
+    parser.add_argument('--rank_list', default=list(range(1, 6)),  # (1, 5)
                         type=int, nargs='+', help='Rank')
     parser.add_argument('--n_matrices_test', default=16384,
                         type=int, help='Number of matrices to put before printing (each matrix is newly generated)')
+    parser.add_argument('--frac_nan_rand_mask_list', default=[0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 0.95],  # 0.025, 0.05, 0.1
+                        type=float, nargs='+', help='Fraction of random NaN mask')
+    parser.add_argument('--frac_nan_col_mask_list', default=[0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 0.95],
+                        type=float, nargs='+', help='Fraction of col-specific NaN mask (only)')
+    parser.add_argument('--frac_col_vs_random', default=0.5,
+                        type=float, help='Fraction of NaN masks that are col-specific vs random')
 
     # training args
     parser.add_argument('--lr', default=1e-3, type=float,  # 1e-3
                         help='Learning rate')
     parser.add_argument('--batch_size', default=1024,
                         type=int, help='Batch size')
-    parser.add_argument('--frac_nan_mask', default=[0.1],  # 0.025, 0.05, 0.1
-                        type=float, nargs='+', help='Fraction of NaN mask')
     parser.add_argument('--seed', default=13, type=int, help='Seed')
     parser.add_argument('--num_epochs', default=100000,
                         type=int, help='Number of epochs')
@@ -127,7 +131,9 @@ if __name__ == "__main__":
         'm_list': args.n_rows_list,
         'n_list': args.n_columns_list,
         'rank_list': args.rank_list,
-        'frac_nan_mask_list': args.frac_nan_mask,
+        'frac_nan_rand_mask_list': args.frac_nan_rand_mask_list,
+        'frac_nan_col_mask_list': args.frac_nan_col_mask_list,
+        'frac_col_vs_random': args.frac_col_vs_random,
         'use_rowcol_attn': args.use_rowcol_attn,
         'n_registers': args.n_registers,
     }

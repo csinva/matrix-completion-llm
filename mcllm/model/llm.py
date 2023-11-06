@@ -285,7 +285,7 @@ class TabLLM(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-        scheduler = ReduceLROnPlateau(optimizer, 'min')
+        scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5)
         return {'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'monitor': 'loss'}}
 
     def training_step(self, batch, batch_idx):

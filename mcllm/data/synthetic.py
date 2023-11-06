@@ -55,6 +55,30 @@ def get_att_mask(m_max, n_max, n_registers, m, n, use_rowcol_attn: bool):
     return att_mask_kernel
 
 
+def get_nan_mask(
+    m_max, n_max, n_registers, m, n,
+    frac_nan_rand_mask_list, frac_nan_col_mask_list, frac_col_vs_random,
+    rng
+):
+    '''
+    nan mask - randomly mask some frac (1 means nan)
+    only mask values in first m rows and first n cols
+    '''
+    nan_mask = np.zeros((m_max + n_registers,
+                        n_max + n_registers))
+    use_col_mask = rng.binomial(1, frac_col_vs_random)
+    if use_col_mask:
+        # set fraction of a single random column to nan
+        frac_nan_col_mask = rng.choice(frac_nan_col_mask_list)
+        col_idx = rng.choice(n)
+        nan_mask[:m, col_idx] = rng.binomial(
+            1, frac_nan_col_mask, size=(m, 1)).flatten()
+    else:
+        frac_nan_rand_mask = rng.choice(frac_nan_rand_mask_list)
+        nan_mask[:m, :n] = rng.binomial(1, frac_nan_rand_mask, size=(m, n))
+    return torch.Tensor(nan_mask).flatten()
+
+
 class LowRankDataset(data.Dataset):
     '''
     Dataset that returns low-rank matrices
@@ -70,7 +94,9 @@ class LowRankDataset(data.Dataset):
         m_list: List[int],
         n_list: List[int],
         rank_list: List[int],
-        frac_nan_mask_list: List[float],
+        frac_nan_rand_mask_list: List[float],
+        frac_nan_col_mask_list: List[float],
+        frac_col_vs_random: float,
         use_rowcol_attn: bool = False,
         length=100, seed=13, randomize=False,
         n_registers=1,
@@ -81,14 +107,16 @@ class LowRankDataset(data.Dataset):
             n_list = [n_list]
         if isinstance(rank_list, int):
             rank_list = [rank_list]
-        if isinstance(frac_nan_mask_list, float):
-            frac_nan_mask_list = [frac_nan_mask_list]
+        if isinstance(frac_nan_rand_mask_list, float):
+            frac_nan_rand_mask_list = [frac_nan_rand_mask_list]
         self.m_list = m_list
         self.n_list = n_list
         self.m_max = max(m_list)
         self.n_max = max(n_list)
         self.rank_list = rank_list
-        self.frac_nan_mask_list = frac_nan_mask_list
+        self.frac_nan_rand_mask_list = frac_nan_rand_mask_list
+        self.frac_nan_col_mask_list = frac_nan_col_mask_list
+        self.frac_col_vs_random = frac_col_vs_random
         self.seed = seed
         self.length = length
         self.randomize = randomize
@@ -117,7 +145,6 @@ class LowRankDataset(data.Dataset):
         n = self.rng.choice(self.n_list)
         rank_list_filt = [r for r in self.rank_list if r < min(m, n) - 1]
         rank = self.rng.choice(rank_list_filt)
-        frac_nan_mask = self.rng.choice(self.frac_nan_mask_list)
 
         # create matrix
         x = self.get_low_rank_matrix(m, n, rank)
@@ -130,13 +157,11 @@ class LowRankDataset(data.Dataset):
         x_clean = torch.Tensor(x_clean.flatten())
 
         # get masks and x_nan
-        # nan mask - randomly mask some frac (1 means nan)
-        # only mask values in first m rows and first n cols
-        nan_mask = np.zeros((self.m_max + self.n_registers,
-                            self.n_max + self.n_registers))
-        nan_mask[:m, :n] = self.rng.binomial(1, frac_nan_mask, size=(m, n))
-        nan_mask = torch.Tensor(nan_mask).flatten()
-
+        nan_mask = get_nan_mask(
+            self.m_max, self.n_max, self.n_registers, m, n,
+            self.frac_nan_rand_mask_list, self.frac_nan_col_mask_list, self.frac_col_vs_random,
+            rng=self.rng
+        )
         x_nan = x_clean.clone()
         x_nan[nan_mask.bool()] = 0
 
