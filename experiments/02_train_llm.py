@@ -33,7 +33,7 @@ def add_main_args(parser):
     # data args
     parser.add_argument('--n_rows_list', default=list(range(5, 21)),  # (5, 20)
                         type=int, nargs='+', help='Number of rows')
-    parser.add_argument('--n_columns_list', default=list(range(5, 32)),  # (5, 20)
+    parser.add_argument('--n_columns_list', default=list(range(5, 21)),  # (5, 20)
                         type=int, nargs='+', help='Number of columns')
     parser.add_argument('--rank_list', default=list(range(1, 6)),  # (1, 5)
                         type=int, nargs='+', help='Rank')

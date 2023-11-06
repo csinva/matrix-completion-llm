@@ -9,7 +9,7 @@ repo_dir = dirname(dirname(os.path.abspath(__file__)))
 # big expt with rowcol_attn and reg
 # CUDA_VISIBLE_DEVICES=2,3 python experiments/02_train_llm.py --batch_size 512 --n_layers 6 --n_heads 8 --n_embed 16 --n_registers 2 --use_rowcol_attn 1
 # CUDA_VISIBLE_DEVICES=1,2,3 python experiments/02_train_llm.py --batch_size 128 --n_layers 12 --n_heads 12 --n_embed 24 --n_registers 2 --use_rowcol_attn 1
-# CUDA_VISIBLE_DEVICES=1,2,3 python experiments/02_train_llm.py --batch_size 128 --n_layers 12 --n_heads 12 --n_embed 12 --n_registers 2 --use_rowcol_attn 1
+# CUDA_VISIBLE_DEVICES=1,2,3 python experiments/02_train_llm.py --batch_size 128 --n_layers 12 --n_heads 12 --n_embed 36 --n_registers 2 --use_rowcol_attn 1
 
 # big expt with no rowcol_attn and no registers
 # CUDA_VISIBLE_DEVICES=0,1 python experiments/02_train_llm.py --batch_size 512 --n_layers 6 --n_heads 8 --n_embed 16 --n_registers 0 --use_rowcol_attn 0
