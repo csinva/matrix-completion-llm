@@ -71,6 +71,8 @@ def add_main_args(parser):
                         type=float, help='Dropout rate')
     parser.add_argument('--use_rowcol_attn', default=1, type=int, choices=[0, 1],
                         help='Whether to use row/column attention (otherwise use full attention)')
+    parser.add_argument('--use_swa', default=0, type=int,
+                        choices=[0, 1], help='Whether to use SWA')
 
     return parser
 
@@ -172,16 +174,25 @@ if __name__ == "__main__":
     pl_logger = CSVLogger(save_dir_unique, name="logs")
     checkpoint_callback = ModelCheckpoint(
         dirpath=save_dir_unique, save_top_k=1, monitor="val_loss", mode='min')
+
+    if args.use_swa:
+        kwargs_train = dict(
+            callbacks=[StochasticWeightAveraging(
+                swa_lrs=1e-2)] + [checkpoint_callback],
+        )
+    else:
+        kwargs_train = dict(
+            strategy='deepspeed_stage_2',
+            callbacks=[checkpoint_callback],
+        )
+
     trainer = pl.Trainer(
         default_root_dir=save_dir_unique,
         max_epochs=args.num_epochs,
         logger=pl_logger, log_every_n_steps=1,
-        callbacks=[checkpoint_callback],
-        #  callbacks=[StochasticWeightAveraging(swa_lrs=1e-2)],
-        strategy='deepspeed_stage_2',
         check_val_every_n_epoch=args.check_val_every_n_epoch,
         enable_checkpointing=True,
-        #  precision=16,
+        **kwargs_train,
     )
     trainer.fit(model=llm, train_dataloaders=dataloader,
                 val_dataloaders=dataloader_test)
