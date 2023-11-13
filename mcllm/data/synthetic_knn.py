@@ -8,8 +8,7 @@ from synthetic import get_register_mask, get_att_mask, get_nan_mask
 
 class KNNDataset(data.Dataset):
     '''
-    Dataset generated from K centroids, where each centroid is separated by a distance eta, and 
-
+    Dataset generated hypersphere around K centroids.
     '''
     def __init__(self,
                  m_list: List[int], #number of rows
