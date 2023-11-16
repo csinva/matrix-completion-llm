@@ -1,6 +1,6 @@
 import torch
 from tqdm import tqdm
-from mcllm.data.synthetic import LowRankDataset
+from mcllm.data.low_rank import LowRankDataset
 from mcllm.model.llm import TabLLM
 import mcllm.model.model
 import argparse

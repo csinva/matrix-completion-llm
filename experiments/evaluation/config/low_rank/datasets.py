@@ -4,10 +4,9 @@ import numpy as np
 import torch
 
 
-from mcllm.data.synthetic import LowRankDataset
+from mcllm.data.low_rank import LowRankDataset
 
 
 DATALOADERS = [
-    ('low_rank_m10_n10_r3_fracnan01', data.DataLoader(LowRankDataset(10, 10, 3, frac_nan_rand_mask_list = 0.1,frac_nan_col_mask_list = 0.1),
+    ('low_rank_m10_n10_r3_fracnan01', data.DataLoader(LowRankDataset(10, 10, 3, frac_nan_rand_mask_list=0.1, frac_nan_col_mask_list=0.1),
                                                       batch_size=1, shuffle=True))]
-    
