@@ -3,7 +3,7 @@ import torch.utils.data as data
 import numpy as np
 import torch
 import random
-from mcllm.data.synthetic import get_register_mask, get_att_mask, get_nan_mask
+from mcllm.data.low_rank import get_register_mask, get_att_mask, get_nan_mask
 
 class RandomDecisionTreeNode:
     def __init__(self,depth,max_depth,n_features,feature_ranges,available_features):

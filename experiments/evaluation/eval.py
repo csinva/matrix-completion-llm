@@ -96,9 +96,9 @@ def compare_estimators(estimators: List[ModelConfig],data,results_path):
                 results[est.name].append(np.mean((x_target - x_imputed_at_nan) ** 2))
                 results[est.name + "_predictions"].append(x_imputed_at_nan)
         
-    for est in estimators:
-        print(est.name,results[est.name])
-        print(" ")
+    #for est in estimators:
+        #print(est.name,results[est.name])
+        #print(" ")
         
     file_name = dset_name + ".pkl"
     results_file_name = os.path.join(args.results_path,file_name)

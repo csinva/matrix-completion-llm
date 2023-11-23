@@ -2,7 +2,7 @@ from typing import List
 import torch.utils.data as data
 import numpy as np
 import torch
-from mcllm.data.synthetic import get_register_mask, get_att_mask, get_nan_mask
+from mcllm.data.low_rank import get_register_mask, get_att_mask, get_nan_mask
 
 
 
