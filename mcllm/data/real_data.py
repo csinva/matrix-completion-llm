@@ -72,12 +72,13 @@ class RealDataset(data.Dataset):
         self.n_registers = n_registers
         self.register_mask = get_register_mask(
             self.m_max, self.n_max, n_registers)
+        self.full_matrix = download_dataset(self.dataset_name)
         
     def __len__(self):
         return self.length
 
     def get_dataset(self,m,n):
-        df = download_dataset(self.dataset_name)
+        df = self.full_matrix
         # Randomly sample m rows
         sampled_rows = df.sample(n=m)
         sampled_columns = np.random.choice(df.columns, size=n, replace=False)
