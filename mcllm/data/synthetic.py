@@ -67,16 +67,19 @@ def get_nan_mask(
     nan_mask = np.zeros((m_max + n_registers,
                         n_max + n_registers))
     use_col_mask = rng.binomial(1, frac_col_vs_random)
+    frac_missing = 0.0
     if use_col_mask:
         # set fraction of a single random column to nan
         frac_nan_col_mask = rng.choice(frac_nan_col_mask_list)
+        frac_missing = frac_nan_col_mask
         col_idx = rng.choice(n)
         nan_mask[:m, col_idx] = rng.binomial(
             1, frac_nan_col_mask, size=(m, 1)).flatten()
     else:
         frac_nan_rand_mask = rng.choice(frac_nan_rand_mask_list)
+        frac_missing = frac_nan_rand_mask
         nan_mask[:m, :n] = rng.binomial(1, frac_nan_rand_mask, size=(m, n))
-    return torch.Tensor(nan_mask).flatten()
+    return torch.Tensor(nan_mask).flatten(),use_col_mask,frac_missing
 
 
 class LowRankDataset(data.Dataset):
@@ -94,9 +97,9 @@ class LowRankDataset(data.Dataset):
         m_list: List[int],
         n_list: List[int],
         rank_list: List[int],
-        frac_nan_rand_mask_list: List[float],
-        frac_nan_col_mask_list: List[float],
-        frac_col_vs_random: float,
+        frac_nan_rand_mask_list: List[float], #fraction of entries across entire matrix to delete 
+        frac_nan_col_mask_list: List[float] = 0.1, #fraction of entries in a given column to delete
+        frac_col_vs_random: float = 0.0, #probability of deleting row value
         use_rowcol_attn: bool = False,
         length=100, seed=13, randomize=False,
         n_registers=1,
@@ -109,6 +112,8 @@ class LowRankDataset(data.Dataset):
             rank_list = [rank_list]
         if isinstance(frac_nan_rand_mask_list, float):
             frac_nan_rand_mask_list = [frac_nan_rand_mask_list]
+        if isinstance(frac_nan_col_mask_list,float):
+            frac_nan_col_mask_list = [frac_nan_col_mask_list]
         self.m_list = m_list
         self.n_list = n_list
         self.m_max = max(m_list)
@@ -157,7 +162,7 @@ class LowRankDataset(data.Dataset):
         x_clean = torch.Tensor(x_clean.flatten())
 
         # get masks and x_nan
-        nan_mask = get_nan_mask(
+        nan_mask,use_col_mask,frac_missing = get_nan_mask(
             self.m_max, self.n_max, self.n_registers, m, n,
             self.frac_nan_rand_mask_list, self.frac_nan_col_mask_list, self.frac_col_vs_random,
             rng=self.rng
@@ -168,7 +173,7 @@ class LowRankDataset(data.Dataset):
         att_mask = get_att_mask(
             self.m_max, self.n_max, self.n_registers, m, n, self.use_rowcol_attn)
 
-        return x_nan, x_clean, nan_mask, att_mask, self.register_mask
+        return x_nan, x_clean, nan_mask, att_mask, self.register_mask,self.n_registers,x, use_col_mask,frac_missing,self.m_max,self.n_max
 
 
 if __name__ == '__main__':

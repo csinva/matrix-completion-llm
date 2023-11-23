@@ -23,7 +23,9 @@ module = module.to(device).eval()
 print(d['hyper_parameters'])
 
 ESTIMATORS = [
-    [ModelConfig('KNN',KNNImputer)],
-    [ModelConfig('MissForest',MissForest)],
-    [ModelConfig('McLLM',module)]
+    ModelConfig('KNN',KNNImputer),
+    ModelConfig('MeanImputer',MeanImputer),
+    ModelConfig('MedianImputer',MedianImputer),
+    ModelConfig('SoftImpute',SoftImpute),
+    ModelConfig('McLLM',module)
 ]

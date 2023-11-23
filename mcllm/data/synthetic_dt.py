@@ -3,7 +3,7 @@ import torch.utils.data as data
 import numpy as np
 import torch
 import random
-from synthetic import get_register_mask, get_att_mask, get_nan_mask
+from mcllm.data.synthetic import get_register_mask, get_att_mask, get_nan_mask
 
 class RandomDecisionTreeNode:
     def __init__(self,depth,max_depth,n_features,feature_ranges,available_features):
@@ -95,6 +95,8 @@ class DTDataset(data.Dataset):
             depth_list = [depth_list]
         if isinstance(frac_nan_rand_mask_list, float):
             frac_nan_rand_mask_list = [frac_nan_rand_mask_list]
+        if isinstance(frac_nan_col_mask_list,float):
+            frac_nan_col_mask_list = [frac_nan_col_mask_list]
         self.m_list = m_list
         self.n_list = n_list
         self.append_label = append_label
@@ -159,13 +161,13 @@ class DTDataset(data.Dataset):
         m = self.rng.choice(self.m_list)
         n = self.rng.choice(self.n_list)
         depth_list_filt = [d for d in self.depth_list if d < n - 1] 
-        rank = self.rng.choice(depth_list_filt)
+        depth = self.rng.choice(depth_list_filt)
 
         # create matrix
         if self.append_label:
-            x = self.get_DT_matrix(m, n - 1, depth)
+            x = self.get_DT_matrix(m, n - 1, depth).numpy()
         else:
-            x = self.get_DT_matrix(m, n , depth)
+            x = self.get_DT_matrix(m, n , depth).numpy()
         #x = (x - x.mean(axis=1).reshape(-1, 1)) / x.std(axis=1).reshape(-1, 1)
 
         # put matrix into full matrix
@@ -175,7 +177,7 @@ class DTDataset(data.Dataset):
         x_clean = torch.Tensor(x_clean.flatten())
 
         # get masks and x_nan
-        nan_mask = get_nan_mask(
+        nan_mask,use_col_mask,frac_missing = get_nan_mask(
             self.m_max, self.n_max, self.n_registers, m, n,
             self.frac_nan_rand_mask_list, self.frac_nan_col_mask_list, self.frac_col_vs_random,
             rng=self.rng
@@ -186,7 +188,7 @@ class DTDataset(data.Dataset):
         att_mask = get_att_mask(
             self.m_max, self.n_max, self.n_registers, m, n, self.use_rowcol_attn)
 
-        return x_nan, x_clean, nan_mask, att_mask, self.register_mask
+        return x_nan, x_clean, nan_mask, att_mask, self.register_mask,self.n_registers,x, use_col_mask,frac_missing,self.m_max,self.n_max
 
 
         

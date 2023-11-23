@@ -2,7 +2,7 @@ from typing import List
 import torch.utils.data as data
 import numpy as np
 import torch
-from synthetic import get_register_mask, get_att_mask, get_nan_mask
+from mcllm.data.synthetic import get_register_mask, get_att_mask, get_nan_mask
 
 
 
@@ -14,7 +14,7 @@ class KNNDataset(data.Dataset):
                  m_list: List[int], #number of rows
                  n_list: List[int], #number of columns
                  num_centroids_list: List[int], #number of centroids, 
-                 distance_list: List[int], #distance of hyperspheres around each hypersphere,
+                 distance_list: List[int], #distance around each hypersphere,
                  frac_nan_rand_mask_list :  List[float], #fraction of entries to set to nan
                  frac_nan_col_mask_list: List[float], #fraction of a single column to nan
                  frac_col_vs_random: float = 0.0,
@@ -31,6 +31,8 @@ class KNNDataset(data.Dataset):
             distance_list = [distance_list]
         if isinstance(frac_nan_rand_mask_list, float):
             frac_nan_rand_mask_list = [frac_nan_rand_mask_list]
+        if isinstance(frac_nan_col_mask_list,float):
+            frac_nan_col_mask_list = [frac_nan_col_mask_list]
         self.m_list = m_list
         self.n_list = n_list
         self.m_max = max(m_list)
@@ -72,7 +74,7 @@ class KNNDataset(data.Dataset):
         distance = self.rng.choice(self.distance_list)
 
         #create matrix
-        x = self.get_knn_matrix(m, n, num_centroids,distance)
+        x = self.get_knn_matrix(m, n, num_centroids,distance).numpy()
 
         #put matrix into full matrix
         x_clean = np.zeros((self.m_max + self.n_registers,
@@ -81,7 +83,7 @@ class KNNDataset(data.Dataset):
         x_clean = torch.Tensor(x_clean.flatten())
 
          # get masks and x_nan
-        nan_mask = get_nan_mask(
+        nan_mask,use_col_mask,frac_missing = get_nan_mask(
             self.m_max, self.n_max, self.n_registers, m, n,
             self.frac_nan_rand_mask_list, self.frac_nan_col_mask_list, self.frac_col_vs_random,
             rng=self.rng
@@ -92,7 +94,7 @@ class KNNDataset(data.Dataset):
         att_mask = get_att_mask(
             self.m_max, self.n_max, self.n_registers, m, n, self.use_rowcol_attn)
 
-        return x_nan, x_clean, nan_mask, att_mask, self.register_mask
+        return x_nan, x_clean, nan_mask, att_mask, self.register_mask,self.n_registers,x, use_col_mask,frac_missing,self.m_max,self.n_max
 
 
 

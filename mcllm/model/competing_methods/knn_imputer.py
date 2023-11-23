@@ -2,7 +2,11 @@ from sklearn.impute import KNNImputer as KNN
 import numpy as np
 
 class KNNImputer:
-    def fit_transform(self, m: np.ndarray,k):
+    '''
+    Simple wrapper around kNN
+    '''        
+    
+    def fit_transform(self, m: np.ndarray,k = 3):
         '''Impute each nan value with via nearest neighbors
         '''
         imp = KNN(n_neighbors = k,weights = 'uniform')
