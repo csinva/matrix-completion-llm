@@ -4,6 +4,24 @@ import numpy as np
 import torch
 
 
+def get_masks(
+        x_clean, m_max, n_max, m, n, n_registers,
+        frac_nan_rand_mask_list, frac_nan_col_mask_list,
+        frac_col_vs_random, use_rowcol_attn, rng
+):
+    nan_mask = get_nan_mask(
+        m_max, n_max, n_registers, m, n,
+        frac_nan_rand_mask_list, frac_nan_col_mask_list, frac_col_vs_random,
+        rng=rng
+    )
+    x_nan = x_clean.clone()
+    x_nan[nan_mask.bool()] = 0
+
+    att_mask = get_att_mask(
+        m_max, n_max, n_registers, m, n, use_rowcol_attn)
+    return x_nan, nan_mask, att_mask
+
+
 def get_register_mask(m_max, n_max, n_registers):
     '''Returns flattened mask that is 0 everywhere except for the registers.
     Note: registers are stored at the right / bottom of the sequence

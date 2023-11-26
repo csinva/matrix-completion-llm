@@ -2,7 +2,7 @@ from typing import List
 import torch.utils.data as data
 import numpy as np
 import torch
-from mcllm.data.util import get_register_mask, get_att_mask, get_nan_mask
+from mcllm.data.util import get_register_mask, get_att_mask, get_nan_mask, get_masks
 
 
 class LowRankDataset(data.Dataset):
@@ -83,16 +83,10 @@ class LowRankDataset(data.Dataset):
         x_clean = torch.Tensor(x_clean.flatten())
 
         # get masks and x_nan
-        nan_mask = get_nan_mask(
-            self.m_max, self.n_max, self.n_registers, m, n,
-            self.frac_nan_rand_mask_list, self.frac_nan_col_mask_list, self.frac_col_vs_random,
-            rng=self.rng
-        )
-        x_nan = x_clean.clone()
-        x_nan[nan_mask.bool()] = 0
-
-        att_mask = get_att_mask(
-            self.m_max, self.n_max, self.n_registers, m, n, self.use_rowcol_attn)
+        x_nan, nan_mask, att_mask = get_masks(
+            x_clean, self.m_max, self.n_max, m, n, self.n_registers,
+            self.frac_nan_rand_mask_list, self.frac_nan_col_mask_list,
+            self.frac_col_vs_random, self.use_rowcol_attn, self.rng)
 
         return x_nan, x_clean, nan_mask, att_mask, self.register_mask
 

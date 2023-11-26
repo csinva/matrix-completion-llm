@@ -8,6 +8,8 @@ repo_dir = dirname(dirname(os.path.abspath(__file__)))
 
 # big expt
 # CUDA_VISIBLE_DEVICES=2,3 python experiments/02_train_llm.py --batch_size 128 --n_layers 12 --n_heads 12 --n_embed 36 --n_registers 2 --use_rowcol_attn 1
+# CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/02_train_llm.py --batch_size 2 --n_layers 24 --n_heads 24 --n_embed 24 --n_registers 2 --use_rowcol_attn 1
+
 
 # variations
 # reg=0: CUDA_VISIBLE_DEVICES=0,1 python experiments/02_train_llm.py --batch_size 128 --n_layers 12 --n_heads 12 --n_embed 36 --n_registers 0 --use_rowcol_attn 1
