@@ -57,6 +57,8 @@ def add_main_args(parser):
     parser.add_argument("--save_dir", type=str,
                         default=join(path_to_repo, "results"),
                         help="directory for saving")
+    parser.add_argument('--use_randomize_train', default=1, type=int,
+                        choices=[0, 1], help='Whether to randomize training data')
 
     # model args
     parser.add_argument('--n_layers', default=4,  # 8
@@ -140,7 +142,7 @@ if __name__ == "__main__":
         'n_registers': args.n_registers,
     }
     dataset = LowRankDataset(
-        seed=args.seed, length=args.batch_size * 16, randomize=True, **kwargs)
+        seed=args.seed, length=args.batch_size * 16, randomize=args.use_randomize_train, **kwargs)
     dataset_test = LowRankDataset(
         seed=args.seed + 1, length=args.n_matrices_test, randomize=False, **kwargs)
     dataloader = data.DataLoader(
